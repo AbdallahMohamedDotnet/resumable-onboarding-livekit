@@ -12,9 +12,12 @@ import time
 import uuid
 from datetime import timedelta
 from pathlib import Path
+from urllib.request import urlopen
 
+from aiohttp import ClientError
 from dotenv import load_dotenv
 from livekit import api
+from livekit.api.twirp_client import ServerError
 from rich.console import Console
 from rich.table import Table
 
@@ -100,6 +103,18 @@ async def start_connection(store: Store, onboarding_id: str, credential: str) ->
 
 
 def doctor(store: Store) -> dict:
+    url = (
+        os.getenv("LIVEKIT_URL", "")
+        .replace("ws://", "http://")
+        .replace("wss://", "https://")
+    )
+    reachable = False
+    if url:
+        try:
+            with urlopen(url, timeout=0.5) as response:
+                reachable = response.status == 200
+        except OSError, ValueError:
+            pass
     checks = {
         "offline": {
             "sqlite_version": __import__("sqlite3").sqlite_version,
@@ -111,6 +126,7 @@ def doctor(store: Store) -> dict:
         },
         "real_room": {
             "url": bool(os.getenv("LIVEKIT_URL")),
+            "server_reachable": reachable,
             "api_key": bool(os.getenv("LIVEKIT_API_KEY")),
             "api_secret": bool(os.getenv("LIVEKIT_API_SECRET")),
         },
@@ -233,6 +249,8 @@ def main() -> int:
         elif command == "reconcile":
             value = []
             for row in store.list_onboardings():
+                if row["status"] in {"complete", "declined"}:
+                    continue
                 onboarding_id = row["id"]
                 active = [
                     c
@@ -256,7 +274,7 @@ def main() -> int:
             raise AssertionError(command)
         show(value, args.json)
         return 0
-    except (StateError, KeyError, ValueError, OSError) as exc:
+    except (StateError, KeyError, ValueError, OSError, ClientError, ServerError) as exc:
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 

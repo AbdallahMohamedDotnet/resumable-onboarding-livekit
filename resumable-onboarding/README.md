@@ -61,9 +61,11 @@ Speech not saved before a crash cannot be reconstructed. An unfinished utterance
 ./scripts/restart.sh all
 ```
 
-`simulate.sh` executes three real subprocess `SIGKILL` checkpoints on an isolated temporary database: after input commit, inside a business transaction, and after answer commit. It reopens the same file and checks the transcript, canonical revision, pending work, operations, next action, and `PRAGMA integrity_check`. These are SQLite recovery checks, not a claim of LiveKit job recovery. To inspect device takeover, call `resume` again and compare connection generations and rooms. Duplicate dispatch can be checked by repeating `reconcile` and inspecting `connections` and the room's dispatch list. Corrections, duplicate operations, booking competition, and workflow v1/v2 compatibility are covered by offline tests to the extent noted in the test names.
+`simulate.sh` executes three real subprocess `SIGKILL` checkpoints on an isolated temporary database: after input commit, inside a business transaction, and after answer commit. It reopens the same file and checks the transcript, canonical revision, pending work, operations, next action, and `PRAGMA integrity_check`.
 
-Real-room client reconnection, actual job-process `SIGKILL`, provider failures, and cross-device media require a running server, a client, and provider credentials. They are not covered by the ordinary offline suite. Live OpenRouter/ElevenLabs calls incur provider charges and are never run implicitly by setup or tests.
+With the local server running, `RUN_LIVEKIT_ROOM_TEST=1 ./scripts/simulate.sh` additionally launches a real agent worker against a temporary database, dispatches a job, waits for its recorded job PID, kills that job with `SIGKILL`, and verifies that a new authorized room claims ownership while the old executor is fenced. It exercises the real room and job path up to participant arrival, without provider inference or conversation replay. To inspect device takeover manually, call `resume` again and compare connection generations and rooms. Duplicate dispatch can be checked by repeating `reconcile` and inspecting `connections` and the room's dispatch list. Corrections, duplicate operations, booking competition, and workflow v1/v2 compatibility are covered by offline tests to the extent noted in the test names.
+
+Real-room client reconnection, provider failures, and cross-device media require a running server, a client, and provider credentials. They are not covered by the ordinary offline suite. Live OpenRouter/ElevenLabs calls incur provider charges and are never run implicitly by setup or tests.
 
 ## Design and data flow
 
