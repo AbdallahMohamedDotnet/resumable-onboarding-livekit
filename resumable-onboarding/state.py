@@ -154,8 +154,6 @@ class Store:
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if self.path.parent.stat().st_mode & 0o077:
-            self.path.parent.chmod(0o700)
         db = sqlite3.connect(self.path, timeout=5, isolation_level=None)
         db.row_factory = sqlite3.Row
         try:

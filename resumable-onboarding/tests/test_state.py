@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from stat import S_IMODE
 
 import pytest
 
@@ -15,6 +16,18 @@ def active(tmp_path):
     )
     store.claim(connection_id, "executor")
     return store, onboarding_id, credential, connection_id
+
+
+def test_existing_database_directory_permissions_are_preserved(tmp_path):
+    shared_dir = tmp_path / "shared"
+    shared_dir.mkdir(mode=0o755)
+    store = Store(shared_dir / "onboarding.sqlite3")
+
+    store.migrate()
+
+    assert S_IMODE(shared_dir.stat().st_mode) == 0o755
+    assert S_IMODE(store.path.stat().st_mode) == 0o600
+    assert store.integrity() == "ok"
 
 
 def capture(active, source, text="I have some information"):
