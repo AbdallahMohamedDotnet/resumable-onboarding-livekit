@@ -1,0 +1,25 @@
+[project]
+name = "resumable-onboarding"
+version = "0.1.0"
+description = "Self-hosted LiveKit customer onboarding agent with durable SQLite state"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+  "livekit-agents[openai,elevenlabs,silero]~=1.8",
+  "livekit-api~=1.0",
+  "python-dotenv>=1.0",
+  "rich>=13",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=1", "ruff>=0.13"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = ["live: requires a running LiveKit server and provider credentials"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
