@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from state import Conflict, Store, Unauthorized, UnsupportedWorkflow
+from state import Conflict, StateError, Store, Unauthorized, UnsupportedWorkflow
 
 
 @pytest.fixture
@@ -156,3 +156,120 @@ def test_workflow_version_and_unsupported(active):
     with pytest.raises(UnsupportedWorkflow):
         store.get(onboarding_id)
     assert store.integrity() == "ok"
+
+
+def next_monday_noon():
+    return (
+        (datetime.now(UTC) + timedelta(days=8 - datetime.now(UTC).weekday()))
+        .replace(hour=12, minute=0, second=0, microsecond=0)
+        .isoformat()
+        .replace("+00:00", "")
+    )
+
+
+def test_competing_booking_and_reschedule_preserves_old_on_failure(tmp_path):
+    store = Store(tmp_path / "competition.sqlite3")
+    store.migrate()
+    first_id, first_secret = store.create()
+    second_id, second_secret = store.create()
+    first_connection, _ = store.connect_attempt(first_id, first_secret, "first", "p1")
+    second_connection, _ = store.connect_attempt(
+        second_id, second_secret, "second", "p2"
+    )
+    store.claim(first_connection, "one")
+    store.claim(second_connection, "two")
+    start = next_monday_noon()
+    first = store.propose(first_id, first_connection, "one", "p1", start, "UTC")
+    second = store.propose(second_id, second_connection, "two", "p2", start, "UTC")
+    store.confirm(
+        first_id, first_connection, "one", "a1", first["id"], first["revision"], True
+    )
+    with pytest.raises(Conflict):
+        store.confirm(
+            second_id,
+            second_connection,
+            "two",
+            "a2",
+            second["id"],
+            second["revision"],
+            True,
+        )
+    assert store.rows("followups", second_id)[0]["status"] == "proposed"
+    assert store.rows("followups", first_id)[0]["status"] == "booked"
+    later = (datetime.fromisoformat(start) + timedelta(days=1)).isoformat()
+    other_slot = store.propose(second_id, second_connection, "two", "p3", later, "UTC")
+    store.confirm(
+        second_id,
+        second_connection,
+        "two",
+        "a3",
+        other_slot["id"],
+        other_slot["revision"],
+        True,
+    )
+    replacement = store.propose(first_id, first_connection, "one", "p4", later, "UTC")
+    with pytest.raises(Conflict):
+        store.confirm(
+            first_id,
+            first_connection,
+            "one",
+            "a4",
+            replacement["id"],
+            replacement["revision"],
+            True,
+        )
+    assert (
+        next(
+            row for row in store.rows("followups", first_id) if row["id"] == first["id"]
+        )["status"]
+        == "booked"
+    )
+    assert store.integrity() == "ok"
+
+
+def test_summary_revision_and_availability_correction_after_booking(active):
+    store, onboarding_id, _, connection_id = active
+    first_summary = store.summary(onboarding_id)
+    assert first_summary["state_revision"] == 0
+    capture(active, "availability", "Tuesday works")
+    apply(active, "availability", {"followup.availability": {"value": "Tuesday"}})
+    assert store.summary(onboarding_id)["state_revision"] == 1
+    assert [x["status"] for x in store.rows("summaries", onboarding_id)] == [
+        "historical",
+        "current",
+    ]
+    proposal = store.propose(
+        onboarding_id, connection_id, "executor", "p1", next_monday_noon(), "UTC"
+    )
+    store.confirm(
+        onboarding_id,
+        connection_id,
+        "executor",
+        "a1",
+        proposal["id"],
+        proposal["revision"],
+        True,
+    )
+    assert store.get(onboarding_id)["status"] == "complete"
+    capture(active, "correction", "Actually Thursday works")
+    apply(
+        active,
+        "correction",
+        {"followup.availability": {"value": "Thursday"}},
+        ["followup.availability"],
+    )
+    assert store.get(onboarding_id)["status"] == "reschedule_required"
+    assert store.rows("followups", onboarding_id)[0]["status"] == "booked"
+    assert store.summary(onboarding_id)["partial"] is True
+    assert store.next_action(onboarding_id)["kind"] == "question"
+
+
+def test_isolation_and_invalid_values(active):
+    store, first_id, _, _ = active
+    second_id, _ = store.create()
+    capture(active, "invalid")
+    with pytest.raises(StateError):
+        apply(active, "invalid", {"company.employee_count": {"value": False}})
+    assert store.get(first_id)["revision"] == 0
+    assert store.get(second_id)["revision"] == 0
+    assert store.rows("operations", first_id) == []

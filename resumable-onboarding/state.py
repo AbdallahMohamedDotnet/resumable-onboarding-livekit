@@ -595,14 +595,17 @@ class Store:
         duration_minutes: int = 30,
         resource: str = "followup",
     ) -> dict:
-        zone = ZoneInfo(timezone)
+        try:
+            zone = ZoneInfo(timezone)
+        except KeyError as exc:
+            raise StateError("Invalid timezone") from exc
         local = datetime.fromisoformat(start_local)
         if local.tzinfo is not None:
             raise StateError("Proposal start must be local wall time")
         aware = local.replace(tzinfo=zone)
         if (
             aware.astimezone(UTC).astimezone(zone).replace(tzinfo=None) != local
-            or aware.fold
+            or aware.utcoffset() != local.replace(tzinfo=zone, fold=1).utcoffset()
         ):
             raise StateError("Ambiguous or nonexistent local time")
         start = aware.astimezone(UTC)
