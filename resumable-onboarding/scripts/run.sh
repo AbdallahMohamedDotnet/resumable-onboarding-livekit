@@ -102,11 +102,12 @@ case "$case_name" in
     export ONBOARDING_CONSOLE_ID ONBOARDING_CONSOLE_CREDENTIAL
     lk agent console agent.py "$@"
     ;;
+  take) "$uv_bin" run python take_console.py "$@" ;;
   new) "$uv_bin" run python cli.py new "$@" ;;
   resume) "$uv_bin" run python cli.py resume "$@" ;;
   inspect) "$uv_bin" run python cli.py "$@" ;;
   backup) "$uv_bin" run python cli.py backup "$@" ;;
   test) "$uv_bin" run python -m pytest -q "$@" ;;
   simulate) "$uv_bin" run python -m pytest -q tests/test_recovery.py "$@" ;;
-  help|*) echo 'Usage: scripts/run.sh {setup|doctor|start [all|agent]|stop [all|agent]|restart [all|agent]|console|new|resume|inspect|backup|test|simulate}' ;;
+  help|*) echo 'Usage: scripts/run.sh {setup|doctor|start [all|agent]|stop [all|agent]|restart [all|agent]|console|take [--resume SESSION_FILE]|new|resume|inspect|backup|test|simulate}' ;;
 esac

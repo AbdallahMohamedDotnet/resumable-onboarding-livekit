@@ -306,20 +306,32 @@ async def entrypoint(ctx: JobContext) -> None:
         await ctx.connect()
         await ctx.wait_for_participant(identity=participant)
     agent = OnboardingAgent(store, onboarding_id, connection_id, executor_id)
+    text_only = ctx.is_fake_job() and os.getenv("ONBOARDING_TEXT_ONLY") == "1"
+    turn_handling = TurnHandlingOptions(preemptive_generation={"enabled": False})
+    if text_only:
+        turn_handling["turn_detection"] = None
     session = AgentSession(
-        stt=elevenlabs.STT(
-            model=os.getenv("ELEVENLABS_STT_MODEL", "scribe_v2_realtime"),
-            server_vad={"vad_silence_threshold_secs": 1.0},
+        stt=(
+            None
+            if text_only
+            else elevenlabs.STT(
+                model=os.getenv("ELEVENLABS_STT_MODEL", "scribe_v2_realtime"),
+                server_vad={"vad_silence_threshold_secs": 1.0},
+            )
         ),
         llm=openai.LLM.with_openrouter(
             model=required("OPENROUTER_MODEL"), tool_choice="required"
         ),
-        tts=elevenlabs.TTS(
-            voice_id=required("ELEVENLABS_VOICE_ID"),
-            model=os.getenv("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5"),
+        tts=(
+            None
+            if text_only
+            else elevenlabs.TTS(
+                voice_id=required("ELEVENLABS_VOICE_ID"),
+                model=os.getenv("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5"),
+            )
         ),
-        vad=silero.VAD.load(),
-        turn_handling=TurnHandlingOptions(preemptive_generation={"enabled": False}),
+        vad=None if text_only else silero.VAD.load(),
+        turn_handling=turn_handling,
     )
 
     @session.on("conversation_item_added")

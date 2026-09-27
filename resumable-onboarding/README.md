@@ -42,6 +42,8 @@ For a production host, configure a reachable TLS WebSocket address, TURN, firewa
 
 For a trusted local voice/text console, first create an onboarding, then run `./scripts/console.sh --text` or `./scripts/console.sh`. The shortcut prompts for ID and credential. Console mode simulates a room and does not establish real RTC or cross-device behavior. For real rooms, use the token from `new` or `resume` in an existing compatible LiveKit client.
 
+To take a customer session in the terminal without STT, TTS, or audio devices, run `./scripts/take.sh`. Type replies to the questions. The command prints a private resume file path in `run/`; after leaving with Ctrl+C, run `./scripts/take.sh --resume run/taker-ONBOARDING_ID.json` to continue. This test mode still uses the configured OpenRouter model and the durable SQLite workflow. It simulates a room and does not prove browser or device reconnection.
+
 ## Durability and recovery
 
 A finalized turn is written and committed before the LLM can interpret it. A stable source ID links the transcript to its business operation. A transaction applies the accepted answer batch or booking once; the same key and payload returns the stored result, while a changed payload conflicts. Each connection has a generation and a leased executor claim. Stale jobs cannot write new facts. On a fresh job, pending durable turns are replayed in database order through a new native `AgentSession`; a Python session object is never deserialized. `reconcile` checks active attempts and dispatches against the self-hosted server.
