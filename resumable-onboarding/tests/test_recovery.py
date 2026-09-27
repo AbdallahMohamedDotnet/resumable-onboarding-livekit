@@ -5,6 +5,7 @@ import select
 import signal
 import subprocess
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -55,11 +56,24 @@ def worker(stage: str, path: str, onboarding_id: str, connection_id: str) -> Non
             {"customer.name": {"value": "Ahmed"}},
             0,
         )
+    elif stage == "after_booking":
+        proposal = store.rows("followups", onboarding_id)[0]
+        store.confirm(
+            onboarding_id,
+            connection_id,
+            "executor",
+            "approval",
+            proposal["id"],
+            proposal["proposal_revision"],
+            True,
+        )
     print("CHECKPOINT", flush=True)
     signal.pause()
 
 
-@pytest.mark.parametrize("stage", ["after_input", "inside_transaction", "after_state"])
+@pytest.mark.parametrize(
+    "stage", ["after_input", "inside_transaction", "after_state", "after_booking"]
+)
 def test_sigkill_recovery(tmp_path, stage):
     path = tmp_path / "crash.sqlite3"
     store = Store(path)
@@ -69,6 +83,41 @@ def test_sigkill_recovery(tmp_path, stage):
         onboarding_id, credential, "room", "person"
     )
     store.claim(connection_id, "executor")
+    if stage == "after_booking":
+        start = (
+            (datetime.now(UTC) + timedelta(days=8 - datetime.now(UTC).weekday()))
+            .replace(hour=12, minute=0, second=0, microsecond=0)
+            .isoformat()
+            .replace("+00:00", "")
+        )
+        store.capture(
+            onboarding_id,
+            connection_id,
+            "executor",
+            "proposal",
+            "Monday at noon",
+            {"action": {"kind": "proposal"}},
+        )
+        proposal = store.propose(
+            onboarding_id, connection_id, "executor", "proposal", start, "UTC"
+        )
+        prompt = f"May I book your follow-up for {proposal['start_utc']} UTC?"
+        store.observe_assistant(onboarding_id, connection_id, "ask", prompt, False)
+        store.capture(
+            onboarding_id,
+            connection_id,
+            "executor",
+            "approval",
+            "yes",
+            {
+                "action": {
+                    "kind": "approval",
+                    "id": proposal["id"],
+                    "revision": proposal["revision"],
+                    "text": prompt,
+                }
+            },
+        )
     child = subprocess.Popen(
         [
             sys.executable,
@@ -98,12 +147,31 @@ def test_sigkill_recovery(tmp_path, stage):
     reopened = Store(path)
     reopened.migrate()
     assert reopened.integrity() == "ok"
-    assert len(reopened.rows("transcript_events", onboarding_id)) == 1
+    assert len(reopened.rows("transcript_events", onboarding_id)) == (
+        3 if stage == "after_booking" else 1
+    )
     if stage == "after_state":
         assert reopened.get(onboarding_id)["state"]["customer.name"]["value"] == "Ahmed"
         assert reopened.pending_inputs(onboarding_id) == []
         assert reopened.next_action(onboarding_id)["id"] == "customer.contact"
         assert len(reopened.rows("operations", onboarding_id)) == 1
+    elif stage == "after_booking":
+        assert reopened.rows("followups", onboarding_id)[0]["status"] == "booked"
+        assert len(reopened.rows("operations", onboarding_id)) == 2
+        assert reopened.pending_inputs(onboarding_id) == []
+        assert (
+            reopened.confirm(
+                onboarding_id,
+                connection_id,
+                "executor",
+                "approval",
+                proposal["id"],
+                proposal["revision"],
+                True,
+            )["status"]
+            == "booked"
+        )
+        assert len(reopened.rows("followups", onboarding_id)) == 1
     else:
         assert reopened.get(onboarding_id)["revision"] == 0
         assert len(reopened.pending_inputs(onboarding_id)) == 1
