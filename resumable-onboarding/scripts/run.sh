@@ -22,8 +22,7 @@ agent_running() {
   [[ -f "$agent_pid_file" ]] || return 1
   local pid
   pid="$(cat "$agent_pid_file")"
-  [[ -r "/proc/$pid/cmdline" ]] || return 1
-  tr '\0' ' ' < "/proc/$pid/cmdline" | grep -q 'lk agent start agent.py'
+  kill -0 -- "-$pid" 2>/dev/null
 }
 start_server() {
   load_env
@@ -62,10 +61,11 @@ start_agent() {
   mkdir -p run
   chmod 700 run
   "$uv_bin" run python cli.py --json doctor >/dev/null
-  lk agent start agent.py >run/agent.log 2>&1 &
+  started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  setsid "$uv_bin" run python agent.py start >run/agent.log 2>&1 &
   echo "$!" > "$agent_pid_file"
   for _ in {1..30}; do
-    if curl -fsS http://127.0.0.1:8081/ >/dev/null 2>&1; then return; fi
+    if curl -fsS http://127.0.0.1:8081/ >/dev/null 2>&1 && docker logs --since "$started" resumable-onboarding-livekit 2>&1 | grep -q 'worker registered'; then return; fi
     if ! agent_running; then cat run/agent.log >&2; exit 1; fi
     sleep 1
   done
@@ -75,9 +75,9 @@ start_agent() {
 stop_agent() {
   if agent_running; then
     local_pid="$(cat "$agent_pid_file")"
-    kill "$local_pid"
+    kill -TERM -- "-$local_pid"
     for _ in {1..30}; do
-      if [[ ! -e "/proc/$local_pid" ]]; then break; fi
+      if ! kill -0 -- "-$local_pid" 2>/dev/null; then break; fi
       sleep 0.1
     done
   fi

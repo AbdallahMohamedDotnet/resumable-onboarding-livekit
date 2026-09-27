@@ -225,7 +225,7 @@ class OnboardingAgent(Agent):
 async def entrypoint(ctx: JobContext) -> None:
     store = Store()
     await asyncio.to_thread(store.migrate)
-    if ctx.is_fake_job:
+    if ctx.is_fake_job():
         onboarding_id = required("ONBOARDING_CONSOLE_ID")
         credential = required("ONBOARDING_CONSOLE_CREDENTIAL")
         connection_id, _ = await asyncio.to_thread(
@@ -266,6 +266,9 @@ async def entrypoint(ctx: JobContext) -> None:
             pass
 
     ctx.add_shutdown_callback(stop_lease)
+    if not ctx.is_fake_job():
+        await ctx.connect()
+        await ctx.wait_for_participant(identity=participant)
     agent = OnboardingAgent(store, onboarding_id, connection_id, executor_id)
     session = AgentSession(
         stt=elevenlabs.STT(
@@ -301,12 +304,14 @@ async def entrypoint(ctx: JobContext) -> None:
                 )
             )
 
-    await session.start(
-        agent,
-        room=ctx.room,
-        room_options=room_io.RoomOptions(participant_identity=participant),
+    options = (
+        room_io.RoomOptions(participant_identity=participant)
+        if not ctx.is_fake_job()
+        else room_io.RoomOptions()
     )
-    await ctx.connect()
+    await session.start(agent, room=ctx.room, room_options=options)
+    if ctx.is_fake_job():
+        await ctx.connect()
     pending = await asyncio.to_thread(store.pending_inputs, onboarding_id)
     for item in pending:
         recovered_context = ChatContext(

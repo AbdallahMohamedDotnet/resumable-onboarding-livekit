@@ -60,6 +60,7 @@ async def dispatch(
     store: Store, onboarding_id: str, connection_id: str, room: str
 ) -> str:
     async with api.LiveKitAPI() as livekit:
+        await livekit.room.create_room(api.CreateRoomRequest(name=room))
         existing = await livekit.agent_dispatch.list_dispatch(room)
         metadata = json.dumps(
             {"onboarding_id": onboarding_id, "connection_id": connection_id}
