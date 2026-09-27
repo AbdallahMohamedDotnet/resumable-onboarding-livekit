@@ -366,7 +366,14 @@ class Store:
                 and row["lease_until"]
                 and row["lease_until"] > now()
             ):
-                raise Unauthorized("Executor already owns connection")
+                if row["job_pid"] is None:
+                    raise Unauthorized("Executor already owns connection")
+                try:
+                    os.kill(row["job_pid"], 0)
+                except ProcessLookupError:
+                    pass
+                else:
+                    raise Unauthorized("Executor already owns connection")
             db.execute(
                 "UPDATE connections SET executor_id=?,lease_until=?,job_id=COALESCE(?,job_id),job_pid=COALESCE(?,job_pid) WHERE id=?",
                 (executor_id, until, job_id, job_pid, connection_id),

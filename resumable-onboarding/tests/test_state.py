@@ -104,6 +104,17 @@ def test_takeover_fences_old_executor(active):
     assert store.integrity() == "ok"
 
 
+def test_dead_job_can_reclaim_same_connection(active):
+    store, onboarding_id, _, connection_id = active
+    with store.write() as db:
+        db.execute(
+            "UPDATE connections SET job_pid=? WHERE id=?", (2**30, connection_id)
+        )
+    store.claim(connection_id, "replacement", job_id="new-job", job_pid=2**30 + 1)
+    with pytest.raises(Unauthorized):
+        store.capture(onboarding_id, connection_id, "executor", "old", "old", {})
+
+
 def test_booking_and_backup(active, tmp_path):
     store, onboarding_id, _, connection_id = active
     start = (
