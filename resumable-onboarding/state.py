@@ -739,7 +739,7 @@ class Store:
         with self.write() as db:
             self._check_owner(db, onboarding_id, connection_id, executor_id)
             input_event = db.execute(
-                "SELECT id,context_json FROM transcript_events WHERE onboarding_id=? AND source_id=? AND kind='final_turn'",
+                "SELECT id,connection_id,context_json FROM transcript_events WHERE onboarding_id=? AND source_id=? AND kind='final_turn'",
                 (onboarding_id, source_id),
             ).fetchone()
             if input_event is None:
@@ -753,8 +753,13 @@ class Store:
             ):
                 raise Conflict("Approval does not match the presented proposal")
             if not db.execute(
-                "SELECT 1 FROM transcript_events WHERE onboarding_id=? AND role='assistant' AND kind='observed' AND text=? AND id<?",
-                (onboarding_id, action.get("text"), input_event["id"]),
+                "SELECT 1 FROM transcript_events WHERE onboarding_id=? AND connection_id=? AND role='assistant' AND kind='observed' AND text=? AND id<?",
+                (
+                    onboarding_id,
+                    input_event["connection_id"],
+                    action.get("text"),
+                    input_event["id"],
+                ),
             ).fetchone():
                 raise Conflict("Proposal was not observed as delivered")
             old = db.execute("SELECT * FROM operations WHERE key=?", (key,)).fetchone()
