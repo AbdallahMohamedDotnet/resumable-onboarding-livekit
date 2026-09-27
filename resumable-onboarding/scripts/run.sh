@@ -22,7 +22,7 @@ agent_running() {
   [[ -f "$agent_pid_file" ]] || return 1
   local pid
   pid="$(cat "$agent_pid_file")"
-  kill -0 -- "-$pid" 2>/dev/null
+  kill -0 -- "-$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null
 }
 start_server() {
   load_env
