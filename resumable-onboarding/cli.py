@@ -68,8 +68,25 @@ async def dispatch(
         metadata = json.dumps(
             {"onboarding_id": onboarding_id, "connection_id": connection_id}
         )
+        connection = next(
+            row
+            for row in store.rows("connections", onboarding_id)
+            if row["id"] == connection_id
+        )
         for item in existing:
             if item.metadata == metadata:
+                process_gone = False
+                if connection["job_pid"] is not None:
+                    try:
+                        os.kill(connection["job_pid"], 0)
+                    except ProcessLookupError:
+                        process_gone = True
+                terminal = item.state.jobs and all(
+                    job.state.status in {2, 3} for job in item.state.jobs
+                )
+                if process_gone or terminal:
+                    await livekit.agent_dispatch.delete_dispatch(item.id, room)
+                    break
                 store.set_dispatch(connection_id, item.id)
                 return item.id
         result = await livekit.agent_dispatch.create_dispatch(

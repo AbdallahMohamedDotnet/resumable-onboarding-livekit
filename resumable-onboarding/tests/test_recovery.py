@@ -120,7 +120,7 @@ if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "worker":
     os.getenv("RUN_LIVEKIT_ROOM_TEST") != "1",
     reason="Requires self-hosted LiveKit server and explicit opt-in",
 )
-def test_real_job_sigkill_and_takeover(tmp_path):
+def test_real_job_sigkill_and_takeover(tmp_path, monkeypatch):
     import asyncio
     import json
     import time
@@ -128,6 +128,7 @@ def test_real_job_sigkill_and_takeover(tmp_path):
     from dotenv import dotenv_values
     from livekit import api
 
+    from cli import dispatch as reconcile_dispatch
     from state import Unauthorized
 
     root = Path(__file__).resolve().parents[1]
@@ -137,6 +138,8 @@ def test_real_job_sigkill_and_takeover(tmp_path):
         **{key: value for key, value in config.items() if value is not None},
     }
     env["ONBOARDING_DB_PATH"] = str(tmp_path / "room.sqlite3")
+    for key in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"):
+        monkeypatch.setenv(key, env[key])
     log_path = tmp_path / "worker.log"
     store = Store(env["ONBOARDING_DB_PATH"])
     store.migrate()
@@ -194,6 +197,36 @@ def test_real_job_sigkill_and_takeover(tmp_path):
             time.sleep(0.1)
         assert os.getpgid(first["job_pid"]) == worker.pid
         os.kill(first["job_pid"], signal.SIGKILL)
+
+        while True:
+            try:
+                os.kill(first["job_pid"], 0)
+            except ProcessLookupError:
+                break
+            assert time.monotonic() < deadline, log_path.read_text()[-1500:]
+            time.sleep(0.1)
+        asyncio.run(
+            reconcile_dispatch(store, onboarding_id, first_connection, first_room)
+        )
+        while True:
+            reclaimed = next(
+                c
+                for c in store.rows("connections", onboarding_id)
+                if c["id"] == first_connection
+            )
+            if reclaimed["executor_id"] != first["executor_id"]:
+                break
+            assert time.monotonic() < deadline, log_path.read_text()[-1500:]
+            time.sleep(0.1)
+        with pytest.raises(Unauthorized):
+            store.capture(
+                onboarding_id,
+                first_connection,
+                first["executor_id"],
+                "stale",
+                "stale",
+                {},
+            )
         second_room = "test-next-" + onboarding_id
         second_connection, generation = store.connect_attempt(
             onboarding_id, credential, second_room, "second-device"
