@@ -22,6 +22,10 @@ also find `~/.local/bin/uv` directly when it is absent from `PATH`.
 
 `start-session.sh` starts the native LiveKit text console and creates a durable customer session. It does not need the LiveKit server or audio hardware. For real RTC rooms, start a self-hosted LiveKit server and run `uv run python agent.py start` in another terminal. The existing project-owned `resumable-onboarding-livekit` Docker container can be started with `docker start resumable-onboarding-livekit`. Runtime state stays in ignored `run/` and `data/`.
 
+To talk through this computer's microphone and speakers, run `./scripts/start-session.sh --voice`. The local console uses the same durable onboarding agent with ElevenLabs STT and TTS, Silero voice activity detection, and the configured OpenRouter model. It simulates a room locally, so no LiveKit server is needed. Use `./scripts/start-session.sh --list-devices` to find audio devices, then add `--input-device "NAME"` and/or `--output-device "NAME"` to the voice command if needed. Use headphones to reduce speaker feedback.
+
+On Linux, some prebuilt `lk` binaries contain an ALSA data path from their build machine and report `no default input device`. The session script prefers a locally built `$HOME/go/bin/lk` when present; set `ONBOARDING_LK_BIN` to choose another binary. To build LiveKit CLI 2.18.7 against your system audio library, install `portaudio19-dev` and `libasound2-dev`, then run `go install -tags portaudio_system github.com/livekit/livekit-cli/v2/cmd/lk@v2.18.7`. Confirm the fix with `./scripts/start-session.sh --list-devices` before starting a voice session.
+
 For a production host, configure a reachable TLS WebSocket address, TURN, firewall, and certificates using the [self-hosted deployment guide](https://docs.livekit.io/transport/self-hosting/deployment/). The `ws://localhost:7880` default is for local testing. A second device cannot use its own `localhost` to reach this host. Use a compatible LiveKit client with a secure reachable server address. Never put the server API secret on the client.
 
 ## New, resume, and inspect
@@ -46,6 +50,8 @@ uv run python cli.py reconcile
 `state`, `transcript`, `operations`, `followups`, `summary`, and `export` are separate views. Add `--json` before the subcommand for plain JSON output. `transcript --follow` tails observed events. The summary is deterministic from canonical state and the actual booking, with its source revision and unresolved fields. Historical summaries remain in SQLite. Corrections preserve earlier transcript turns and record old/new values in an operation result. An availability correction invalidates a pending proposal; after a booking it marks rescheduling required and retains the old booking until a replacement is approved.
 
 To take a customer session in the terminal without STT, TTS, or audio devices, run `./scripts/start-session.sh`. Type replies to the questions. The command prints a private resume file path in `run/`; after leaving with Ctrl+C, run `./scripts/start-session.sh --resume run/taker-ONBOARDING_ID.json` to continue. This test mode still uses the configured OpenRouter model and the durable SQLite workflow. It simulates a room and does not prove browser or device reconnection. For real rooms, use the token from `new` or `resume` in an existing compatible LiveKit client.
+
+For a voice session, resume with `./scripts/start-session.sh --voice --resume run/taker-ONBOARDING_ID.json`. Voice mode requires `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `ELEVEN_API_KEY`, and `ELEVENLABS_VOICE_ID` in `.env.local`. The terminal needs working local audio devices. Live provider calls incur charges.
 
 ## Durability and recovery
 

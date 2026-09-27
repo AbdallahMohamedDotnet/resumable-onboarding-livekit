@@ -14,7 +14,11 @@ if ! command -v "$uv_bin" >/dev/null 2>&1; then
 fi
 export UV_BIN="$uv_bin"
 
-if ! command -v lk >/dev/null 2>&1; then
+if [[ -z "${ONBOARDING_LK_BIN:-}" && -x "$HOME/go/bin/lk" ]]; then
+  export ONBOARDING_LK_BIN="$HOME/go/bin/lk"
+fi
+lk_bin="${ONBOARDING_LK_BIN:-lk}"
+if ! command -v "$lk_bin" >/dev/null 2>&1; then
   echo 'LiveKit CLI (lk) is required for the session console.' >&2
   exit 1
 fi
