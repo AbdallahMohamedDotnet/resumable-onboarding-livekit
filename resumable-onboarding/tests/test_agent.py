@@ -4,7 +4,7 @@ import pytest
 from livekit.agents import ChatContext, ChatMessage
 
 from agent import OnboardingAgent
-from state import Store
+from state import Store, Unauthorized
 
 
 @pytest.mark.asyncio
@@ -36,3 +36,9 @@ async def test_native_turn_hook_persists_before_reply(tmp_path):
     ]
     assert reply == ["What is the best email or phone number to reach you?"]
     assert store.pending_inputs(onboarding_id) == []
+    store.connect_attempt(onboarding_id, credential, "new-room", "new-person")
+    with pytest.raises(Unauthorized):
+        [
+            chunk
+            async for chunk in agent.llm_node(ChatContext(items=[message]), [], None)
+        ]

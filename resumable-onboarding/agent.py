@@ -93,6 +93,12 @@ class OnboardingAgent(Agent):
             None,
         )
         if latest is None:
+            await asyncio.to_thread(
+                self.store.assert_owner,
+                self.onboarding_id,
+                self.connection_id,
+                self.executor_id,
+            )
             yield (await asyncio.to_thread(self.store.next_action, self.onboarding_id))[
                 "text"
             ]
@@ -120,6 +126,12 @@ class OnboardingAgent(Agent):
                 complete = True
                 break
         if complete:
+            await asyncio.to_thread(
+                self.store.assert_owner,
+                self.onboarding_id,
+                self.connection_id,
+                self.executor_id,
+            )
             yield (await asyncio.to_thread(self.store.next_action, self.onboarding_id))[
                 "text"
             ]

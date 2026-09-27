@@ -392,6 +392,12 @@ class Store:
         ):
             raise Unauthorized("Stale connection or executor")
 
+    def assert_owner(
+        self, onboarding_id: str, connection_id: str, executor_id: str
+    ) -> None:
+        with self.connect() as db:
+            self._check_owner(db, onboarding_id, connection_id, executor_id)
+
     def capture(
         self,
         onboarding_id: str,
