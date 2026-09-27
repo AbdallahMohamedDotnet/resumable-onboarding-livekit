@@ -114,6 +114,7 @@ MIGRATIONS = [
       PRIMARY KEY(onboarding_id, source_revision, schema_version)
     );
     """,
+    "ALTER TABLE connections ADD COLUMN job_pid INTEGER;",
 ]
 
 
@@ -343,7 +344,14 @@ class Store:
             )
         return connection_id, generation
 
-    def claim(self, connection_id: str, executor_id: str, seconds: int = 60) -> None:
+    def claim(
+        self,
+        connection_id: str,
+        executor_id: str,
+        seconds: int = 60,
+        job_id: str | None = None,
+        job_pid: int | None = None,
+    ) -> None:
         until = (datetime.now(UTC) + timedelta(seconds=seconds)).isoformat()
         with self.write() as db:
             row = db.execute(
@@ -360,8 +368,8 @@ class Store:
             ):
                 raise Unauthorized("Executor already owns connection")
             db.execute(
-                "UPDATE connections SET executor_id=?,lease_until=? WHERE id=?",
-                (executor_id, until, connection_id),
+                "UPDATE connections SET executor_id=?,lease_until=?,job_id=COALESCE(?,job_id),job_pid=COALESCE(?,job_pid) WHERE id=?",
+                (executor_id, until, job_id, job_pid, connection_id),
             )
 
     def set_dispatch(self, connection_id: str, dispatch_id: str) -> None:

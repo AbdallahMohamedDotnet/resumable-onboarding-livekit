@@ -257,7 +257,14 @@ async def entrypoint(ctx: JobContext) -> None:
             raise StateError("Dispatch room does not match authorized connection")
         participant = connection["participant"]
     executor_id = uuid.uuid4().hex
-    await asyncio.to_thread(store.claim, connection_id, executor_id)
+    await asyncio.to_thread(
+        store.claim,
+        connection_id,
+        executor_id,
+        60,
+        None if ctx.is_fake_job() else ctx.job.id,
+        os.getpid(),
+    )
 
     async def renew_lease() -> None:
         while True:
