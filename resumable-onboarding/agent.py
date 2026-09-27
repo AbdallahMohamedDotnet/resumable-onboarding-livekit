@@ -308,7 +308,8 @@ async def entrypoint(ctx: JobContext) -> None:
     agent = OnboardingAgent(store, onboarding_id, connection_id, executor_id)
     session = AgentSession(
         stt=elevenlabs.STT(
-            model=os.getenv("ELEVENLABS_STT_MODEL", "scribe_v2_realtime")
+            model=os.getenv("ELEVENLABS_STT_MODEL", "scribe_v2_realtime"),
+            server_vad={"vad_silence_threshold_secs": 1.0},
         ),
         llm=openai.LLM.with_openrouter(
             model=required("OPENROUTER_MODEL"), tool_choice="required"
