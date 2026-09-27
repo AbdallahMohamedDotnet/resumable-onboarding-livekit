@@ -122,7 +122,22 @@ class OnboardingAgent(Agent):
             None,
         )
         if input_event is None:
-            raise StateError("Input persistence barrier was not reached")
+            # generate_reply(user_input=...) bypasses the native turn-completed hook.
+            # Persist that input here before any provider call, including text console turns.
+            await self.on_user_turn_completed(chat_ctx, latest)
+            captured = await asyncio.to_thread(
+                self.store.rows, "transcript_events", self.onboarding_id
+            )
+            input_event = next(
+                (
+                    item
+                    for item in reversed(captured)
+                    if item["source_id"] == source_id and item["kind"] == "final_turn"
+                ),
+                None,
+            )
+            if input_event is None:
+                raise StateError("Input persistence barrier was not reached")
         context = json.loads(input_event["context_json"])
         complete = False
         for kind in ("answers", "booking", "proposal"):
@@ -208,6 +223,7 @@ class OnboardingAgent(Agent):
             "approval": [confirm_followup],
             "proposal": [propose_followup],
         }.get(context["action"]["kind"], [save_answers])
+        tools[:] = selected
         current = await asyncio.to_thread(self.store.get, self.onboarding_id)
         policy_ctx = chat_ctx.copy()
         policy_ctx.add_message(
