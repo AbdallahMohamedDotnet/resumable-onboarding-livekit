@@ -526,6 +526,36 @@ class Store:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def operation(self, onboarding_id: str, source_id: str, kind: str) -> dict | None:
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT * FROM operations WHERE key=?",
+                (f"{onboarding_id}:{source_id}:{kind}",),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def observe_assistant(
+        self,
+        onboarding_id: str,
+        connection_id: str,
+        source_id: str,
+        text: str,
+        interrupted: bool,
+    ) -> None:
+        with self.write() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO transcript_events(onboarding_id,connection_id,source_id,role,text,kind,created_at) VALUES(?,?,?,?,?,?,?)",
+                (
+                    onboarding_id,
+                    connection_id,
+                    source_id,
+                    "assistant",
+                    text,
+                    "interrupted" if interrupted else "observed",
+                    now(),
+                ),
+            )
+
     def propose(
         self,
         onboarding_id: str,
@@ -553,6 +583,29 @@ class Store:
             raise StateError("Follow-up must be in the future")
         if duration_minutes <= 0:
             raise StateError("Invalid duration")
+        hours = os.getenv("FOLLOWUP_WORKING_HOURS", "mon-fri:09:00-17:00")
+        days, times = hours.split(":", 1)
+        opening, closing = times.split("-")
+        weekday_names = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        first, last = days.split("-")
+        allowed_days = {
+            weekday_names[index % 7]
+            for index in range(
+                weekday_names.index(first), weekday_names.index(last) + 1
+            )
+        }
+        org_zone = ZoneInfo(os.getenv("FOLLOWUP_TIMEZONE", "UTC"))
+        org_start = start.astimezone(org_zone)
+        org_end = end.astimezone(org_zone)
+        if (
+            weekday_names[org_start.weekday()] not in allowed_days
+            or org_start.date() != org_end.date()
+            or not (
+                opening <= org_start.strftime("%H:%M")
+                and org_end.strftime("%H:%M") <= closing
+            )
+        ):
+            raise StateError("Outside configured working hours")
         key = f"{onboarding_id}:{source_id}:proposal"
         payload = {
             "start_local": start_local,
@@ -667,6 +720,14 @@ class Store:
                     (source_id, proposal_id),
                 )
                 result = {"status": "booked", "proposal_id": proposal_id}
+            db.execute(
+                "UPDATE onboardings SET revision=revision+1,updated_at=? WHERE id=?",
+                (now(), onboarding_id),
+            )
+            db.execute(
+                "UPDATE summaries SET status='historical' WHERE onboarding_id=? AND status='current'",
+                (onboarding_id,),
+            )
             db.execute(
                 "INSERT INTO operations(key,onboarding_id,source_id,kind,payload_json,status,result_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
                 (

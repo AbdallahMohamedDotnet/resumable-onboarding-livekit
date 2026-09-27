@@ -107,7 +107,7 @@ def test_takeover_fences_old_executor(active):
 def test_booking_and_backup(active, tmp_path):
     store, onboarding_id, _, connection_id = active
     start = (
-        (datetime.now(UTC) + timedelta(days=7))
+        (datetime.now(UTC) + timedelta(days=8 - datetime.now(UTC).weekday()))
         .replace(hour=12, minute=0, second=0, microsecond=0)
         .isoformat()
         .replace("+00:00", "")
