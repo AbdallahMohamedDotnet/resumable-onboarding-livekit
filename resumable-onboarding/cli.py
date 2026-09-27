@@ -7,6 +7,7 @@ import asyncio
 import getpass
 import json
 import os
+import sqlite3
 import sys
 import time
 import uuid
@@ -20,6 +21,7 @@ from livekit import api
 from livekit.api.twirp_client import ServerError
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from state import StateError, Store
 
@@ -39,7 +41,17 @@ def show(value, as_json: bool = False) -> None:
         for key in keys:
             table.add_column(key)
         for row in value:
-            table.add_row(*(str(row.get(key, "")) for key in keys))
+            table.add_row(
+                *(
+                    Text(
+                        "".join(
+                            ch if ch >= " " or ch in "\n\t" else "�"
+                            for ch in str(row.get(key, ""))
+                        )
+                    )
+                    for key in keys
+                )
+            )
         console.print(table)
     else:
         console.print_json(data=value)
@@ -134,7 +146,8 @@ def doctor(store: Store) -> dict:
             pass
     checks = {
         "offline": {
-            "sqlite_version": __import__("sqlite3").sqlite_version,
+            "sqlite_version": sqlite3.sqlite_version,
+            "wal_reset_fix_version": sqlite3.sqlite_version_info >= (3, 51, 3),
             "integrity": store.integrity(),
         },
         "text_agent": {
@@ -231,7 +244,8 @@ def main() -> int:
                 seen = 0
                 while True:
                     rows = records()
-                    show(rows[seen:], args.json)
+                    if len(rows) > seen:
+                        show(rows[seen:], args.json)
                     seen = len(rows)
                     time.sleep(1)
         elif command == "history":

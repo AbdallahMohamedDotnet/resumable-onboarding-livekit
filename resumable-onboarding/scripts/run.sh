@@ -33,6 +33,7 @@ start_server() {
   fi
   [[ "$LIVEKIT_API_KEY" =~ ^[A-Za-z0-9_-]+$ ]] || { echo 'Invalid LiveKit key' >&2; exit 1; }
   [[ "$LIVEKIT_API_SECRET" =~ ^[A-Za-z0-9_-]{32,}$ ]] || { echo 'LiveKit secret must be at least 32 safe characters' >&2; exit 1; }
+  [[ "$LIVEKIT_API_SECRET" != replace-with-a-secret-of-at-least-32-characters ]] || { echo 'Replace the example LiveKit secret' >&2; exit 1; }
   mkdir -p run
   chmod 700 run
   umask 077
