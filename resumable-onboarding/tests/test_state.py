@@ -341,3 +341,33 @@ def test_declined_followup_finishes_without_timezone(active):
     apply(active, "decline", answers)
     assert store.next_action(onboarding_id)["id"] == "followup.declined"
     assert store.summary(onboarding_id)["partial"] is False
+
+
+def test_zero_value_and_busy_write_preserve_pending_input(active):
+    import sqlite3
+
+    store, onboarding_id, _, connection_id = active
+    capture(active, "zero", "We have zero employees")
+    result = apply(active, "zero", {"company.employee_count": {"value": 0}})
+    assert result["revision"] == 1
+    assert store.get(onboarding_id)["state"]["company.employee_count"]["value"] == 0
+    capture(active, "busy", "My name is Ahmed")
+    blocker = sqlite3.connect(store.path, isolation_level=None)
+    try:
+        blocker.execute("BEGIN IMMEDIATE")
+        with pytest.raises(sqlite3.OperationalError):
+            store.apply_answers(
+                onboarding_id,
+                connection_id,
+                "executor",
+                "busy",
+                {"customer.name": {"value": "Ahmed"}},
+                1,
+            )
+    finally:
+        blocker.rollback()
+        blocker.close()
+    assert store.get(onboarding_id)["revision"] == 1
+    assert [item["source_id"] for item in store.pending_inputs(onboarding_id)] == [
+        "busy"
+    ]

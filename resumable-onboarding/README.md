@@ -67,6 +67,20 @@ With the local server running, `RUN_LIVEKIT_ROOM_TEST=1 ./scripts/simulate.sh` a
 
 Real-room client reconnection, provider failures, and cross-device media require a running server, a client, and provider credentials. They are not covered by the ordinary offline suite. Live OpenRouter/ElevenLabs calls incur provider charges and are never run implicitly by setup or tests.
 
+For manual failure checks with a configured client and providers:
+
+- Temporary disconnect: join with the issued room token, briefly drop the client network, restore it, then inspect `state` and `transcript`. Native LiveKit reconnect should keep the same onboarding.
+- Fresh room or another device: run `resume` with the same ID and credential, join the newly issued room from the other device, and compare `connections`. The server address must be reachable from that device.
+- Agent restart or whole-stack restart: run `./scripts/restart.sh agent` or `./scripts/restart.sh all`, then `./scripts/inspect.sh reconcile` and inspect `operations` and `state`. The SQLite file is preserved.
+- Duplicate dispatch: run `reconcile` twice and inspect dispatch IDs in `connections`; identical metadata should reuse a live dispatch.
+- Delayed stale write: `uv run python -m pytest -q tests/test_state.py -k takeover` exercises the database fence. The opt-in real-room crash test also checks it after a killed job.
+- Correction after resume or completion: say “Actually, Thursday works” on the resumed device, then compare `transcript`, `history`, `followups`, and `summary`.
+- Interrupted booking confirmation: `./scripts/simulate.sh -k after_booking` kills after commit and checks that retry returns one booking.
+- Workflow upgrade: `./scripts/test.sh -k workflow_version` checks that a v1 record remains pinned when v2 exists.
+- Database busy: `./scripts/test.sh -k busy_write` holds a real SQLite write lock through the configured five-second timeout and checks that the captured input stays pending without a state revision.
+
+Model failure, TTS failure, and a killed job during a provider-backed reply still require controlled live fault runs. The offline suite proves durable input and committed-state behavior at the documented SQLite checkpoints; it does not substitute for those provider runs.
+
 ## Design and data flow
 
 - `state.py`: pinned workflow definitions, validation, deterministic next action, SQLite migrations, connections and fencing, idempotent operations, calendar bookings, summaries, and backup.
