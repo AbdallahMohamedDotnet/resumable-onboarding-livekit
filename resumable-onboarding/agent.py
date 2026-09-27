@@ -132,6 +132,9 @@ class OnboardingAgent(Agent):
         async def save_answers(
             run_context: RunContext, answers_json: str, correction_ids: list[str]
         ) -> str:
+            current_revision = (
+                await asyncio.to_thread(self.store.get, self.onboarding_id)
+            )["revision"]
             result = await asyncio.to_thread(
                 self.store.apply_answers,
                 self.onboarding_id,
@@ -139,7 +142,7 @@ class OnboardingAgent(Agent):
                 self.executor_id,
                 source_id,
                 json.loads(answers_json),
-                context["state_revision"],
+                current_revision,
                 correction_ids,
             )
             return json.dumps(result)
@@ -192,8 +195,21 @@ class OnboardingAgent(Agent):
             "approval": [confirm_followup],
             "proposal": [propose_followup],
         }.get(context["action"]["kind"], [save_answers])
+        current = await asyncio.to_thread(self.store.get, self.onboarding_id)
+        policy_ctx = chat_ctx.copy()
+        policy_ctx.add_message(
+            role="system",
+            content=json.dumps(
+                {
+                    "original_turn_context": context,
+                    "workflow_fields": current["workflow"],
+                    "canonical_state": current["state"],
+                    "rule": "Interpret the last user turn only. Call the provided business tool exactly once. Do not invent facts or claim a booking.",
+                }
+            ),
+        )
         async for chunk in Agent.default.llm_node(
-            self, chat_ctx, selected, model_settings
+            self, policy_ctx, selected, model_settings
         ):
             if isinstance(chunk, str):
                 continue
@@ -291,8 +307,31 @@ async def entrypoint(ctx: JobContext) -> None:
         room_options=room_io.RoomOptions(participant_identity=participant),
     )
     await ctx.connect()
-    action = await asyncio.to_thread(store.next_action, onboarding_id)
-    await session.say(action["text"])
+    pending = await asyncio.to_thread(store.pending_inputs, onboarding_id)
+    for item in pending:
+        recovered_context = ChatContext(
+            items=[
+                ChatMessage(id=item["source_id"], role="user", content=[item["text"]])
+            ]
+        )
+        speech = session.generate_reply(chat_ctx=recovered_context)
+        await speech.wait_for_playout()
+        if await asyncio.to_thread(store.pending_inputs, onboarding_id):
+            if (
+                not await asyncio.to_thread(
+                    store.operation, onboarding_id, item["source_id"], "answers"
+                )
+                and not await asyncio.to_thread(
+                    store.operation, onboarding_id, item["source_id"], "booking"
+                )
+                and not await asyncio.to_thread(
+                    store.operation, onboarding_id, item["source_id"], "proposal"
+                )
+            ):
+                raise StateError("Pending input was not committed during recovery")
+    if not pending:
+        action = await asyncio.to_thread(store.next_action, onboarding_id)
+        await session.say(action["text"])
 
 
 if __name__ == "__main__":

@@ -280,7 +280,13 @@ class Store:
                 "SELECT * FROM followups WHERE onboarding_id=? AND status='proposed' ORDER BY created_at DESC LIMIT 1",
                 (onboarding_id,),
             ).fetchone()
-        if booking:
+        if proposal and row["status"] == "reschedule_required":
+            return {
+                "kind": "approval",
+                "id": proposal["id"],
+                "text": f"May I replace your existing booking with {proposal['start_utc']} UTC?",
+            }
+        if booking and row["status"] != "reschedule_required":
             return {
                 "kind": "complete",
                 "id": "followup.booked",
@@ -291,6 +297,12 @@ class Store:
                 "kind": "approval",
                 "id": proposal["id"],
                 "text": f"May I book your follow-up for {proposal['start_utc']} UTC?",
+            }
+        if row["status"] == "declined":
+            return {
+                "kind": "complete",
+                "id": "followup.declined",
+                "text": "No follow-up was booked.",
             }
         return {
             "kind": "proposal",
@@ -509,6 +521,14 @@ class Store:
                         "UPDATE followups SET status='invalidated' WHERE onboarding_id=? AND status='proposed'",
                         (onboarding_id,),
                     )
+                    booked = db.execute(
+                        "SELECT 1 FROM followups WHERE onboarding_id=? AND status='booked'",
+                        (onboarding_id,),
+                    ).fetchone()
+                    db.execute(
+                        "UPDATE onboardings SET status=? WHERE id=?",
+                        ("reschedule_required" if booked else "active", onboarding_id),
+                    )
             result = {"revision": revision, "changes": changes}
             db.execute(
                 "INSERT INTO operations(key,onboarding_id,source_id,kind,payload_json,status,result_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
@@ -529,7 +549,7 @@ class Store:
     def pending_inputs(self, onboarding_id: str) -> list[dict]:
         with self.connect() as db:
             rows = db.execute(
-                "SELECT t.* FROM transcript_events t LEFT JOIN operations o ON o.key=t.onboarding_id||':'||t.source_id||':answers' WHERE t.onboarding_id=? AND t.kind='final_turn' AND o.key IS NULL ORDER BY t.id",
+                "SELECT t.* FROM transcript_events t WHERE t.onboarding_id=? AND t.kind='final_turn' AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.onboarding_id=t.onboarding_id AND o.source_id=t.source_id AND o.status='committed') ORDER BY t.id",
                 (onboarding_id,),
             ).fetchall()
         return [dict(r) for r in rows]
@@ -729,8 +749,12 @@ class Store:
                 )
                 result = {"status": "booked", "proposal_id": proposal_id}
             db.execute(
-                "UPDATE onboardings SET revision=revision+1,updated_at=? WHERE id=?",
-                (now(), onboarding_id),
+                "UPDATE onboardings SET revision=revision+1,status=?,updated_at=? WHERE id=?",
+                (
+                    "complete" if result["status"] == "booked" else "declined",
+                    now(),
+                    onboarding_id,
+                ),
             )
             db.execute(
                 "UPDATE summaries SET status='historical' WHERE onboarding_id=? AND status='current'",
@@ -771,6 +795,8 @@ class Store:
                 if f["required"]
                 and state[f["id"]]["status"] not in f["complete_statuses"]
             ]
+            if row["status"] == "reschedule_required":
+                unresolved.append("followup.reschedule")
             result = {
                 "onboarding_id": onboarding_id,
                 "workflow_version": row["workflow_version"],
@@ -805,7 +831,9 @@ class Store:
                     "booking": dict(booking) if booking else None,
                 },
                 "unresolved_items": unresolved,
-                "partial": bool(unresolved or not booking),
+                "partial": bool(
+                    unresolved or (not booking and row["status"] != "declined")
+                ),
                 "generated_at": now(),
             }
             db.execute(
