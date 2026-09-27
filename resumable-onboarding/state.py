@@ -352,6 +352,14 @@ class Store:
                 (executor_id, until, connection_id),
             )
 
+    def set_dispatch(self, connection_id: str, dispatch_id: str) -> None:
+        with self.write() as db:
+            if not db.execute(
+                "UPDATE connections SET dispatch_id=? WHERE id=? AND status='active'",
+                (dispatch_id, connection_id),
+            ).rowcount:
+                raise Unauthorized("Stale connection")
+
     def _check_owner(
         self,
         db: sqlite3.Connection,

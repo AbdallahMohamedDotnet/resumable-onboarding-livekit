@@ -230,6 +230,26 @@ async def entrypoint(ctx: JobContext) -> None:
         participant = connection["participant"]
     executor_id = uuid.uuid4().hex
     await asyncio.to_thread(store.claim, connection_id, executor_id)
+
+    async def renew_lease() -> None:
+        while True:
+            await asyncio.sleep(20)
+            try:
+                await asyncio.to_thread(store.claim, connection_id, executor_id)
+            except StateError:
+                ctx.shutdown("Connection ownership ended")
+                return
+
+    lease_task = asyncio.create_task(renew_lease())
+
+    async def stop_lease() -> None:
+        lease_task.cancel()
+        try:
+            await lease_task
+        except asyncio.CancelledError:
+            pass
+
+    ctx.add_shutdown_callback(stop_lease)
     agent = OnboardingAgent(store, onboarding_id, connection_id, executor_id)
     session = AgentSession(
         stt=elevenlabs.STT(
