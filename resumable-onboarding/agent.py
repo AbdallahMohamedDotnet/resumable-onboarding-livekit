@@ -64,12 +64,15 @@ class OnboardingAgent(Agent):
         if self.observation_tasks:
             await asyncio.gather(*self.observation_tasks)
         action = await asyncio.to_thread(self.store.next_action, self.onboarding_id)
+        current = await asyncio.to_thread(self.store.get, self.onboarding_id)
         context = {
             "action": action,
-            "state_revision": (
-                await asyncio.to_thread(self.store.get, self.onboarding_id)
-            )["revision"],
+            "state_revision": current["revision"],
             "captured_at": datetime.now(UTC).isoformat(),
+            "customer_timezone": current["state"]
+            .get("followup.customer_timezone", {})
+            .get("value"),
+            "organization_timezone": os.getenv("FOLLOWUP_TIMEZONE", "UTC"),
         }
         await asyncio.to_thread(
             self.store.capture,
@@ -214,7 +217,7 @@ class OnboardingAgent(Agent):
                     "original_turn_context": context,
                     "workflow_fields": current["workflow"],
                     "canonical_state": current["state"],
-                    "rule": "Interpret the last user turn only. Call the provided business tool exactly once. Do not invent facts or claim a booking.",
+                    "rule": "Interpret the last user turn only. Resolve relative dates from original_turn_context.captured_at and its timezone, even during replay. Call the provided business tool exactly once. Do not invent facts or claim a booking.",
                 }
             ),
         )

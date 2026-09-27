@@ -280,7 +280,7 @@ def main() -> int:
         elif command == "reconcile":
             value = []
             for row in store.list_onboardings():
-                if row["status"] in {"complete", "declined"}:
+                if store.next_action(row["id"])["kind"] == "complete":
                     continue
                 onboarding_id = row["id"]
                 active = [

@@ -264,7 +264,12 @@ class Store:
 
     def next_action(self, onboarding_id: str) -> dict:
         row = self.get(onboarding_id)
+        declined = (
+            row["state"].get("followup.availability", {}).get("status") == "declined"
+        )
         for field in row["workflow"]:
+            if declined and field["id"] == "followup.customer_timezone":
+                continue
             item = row["state"].get(field["id"], {"status": "missing"})
             if field["required"] and item["status"] not in field["complete_statuses"]:
                 return {
@@ -301,7 +306,7 @@ class Store:
                 "revision": proposal["proposal_revision"],
                 "text": f"May I book your follow-up for {proposal['start_utc']} UTC?",
             }
-        if row["status"] == "declined":
+        if declined and not booking:
             return {
                 "kind": "complete",
                 "id": "followup.declined",
@@ -848,6 +853,10 @@ class Store:
                 f["id"]
                 for f in workflow
                 if f["required"]
+                and not (
+                    f["id"] == "followup.customer_timezone"
+                    and state["followup.availability"]["status"] == "declined"
+                )
                 and state[f["id"]]["status"] not in f["complete_statuses"]
             ]
             if row["status"] == "reschedule_required":
@@ -887,7 +896,11 @@ class Store:
                 },
                 "unresolved_items": unresolved,
                 "partial": bool(
-                    unresolved or (not booking and row["status"] != "declined")
+                    unresolved
+                    or (
+                        not booking
+                        and state["followup.availability"]["status"] != "declined"
+                    )
                 ),
                 "generated_at": now(),
             }

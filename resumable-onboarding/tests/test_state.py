@@ -326,3 +326,18 @@ def test_booking_requires_observed_exact_proposal(active):
             proposal["revision"],
             True,
         )
+
+
+def test_declined_followup_finishes_without_timezone(active):
+    store, onboarding_id, _, _ = active
+    capture(active, "decline", "I do not want a follow-up")
+    answers = {
+        field["id"]: {"value": field["id"]}
+        for field in store.get(onboarding_id)["workflow"]
+        if field["required"]
+        and field["id"] not in {"followup.availability", "followup.customer_timezone"}
+    }
+    answers["followup.availability"] = {"status": "declined"}
+    apply(active, "decline", answers)
+    assert store.next_action(onboarding_id)["id"] == "followup.declined"
+    assert store.summary(onboarding_id)["partial"] is False
