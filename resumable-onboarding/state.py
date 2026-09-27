@@ -285,6 +285,7 @@ class Store:
             return {
                 "kind": "approval",
                 "id": proposal["id"],
+                "revision": proposal["proposal_revision"],
                 "text": f"May I replace your existing booking with {proposal['start_utc']} UTC?",
             }
         if booking and row["status"] != "reschedule_required":
@@ -297,6 +298,7 @@ class Store:
             return {
                 "kind": "approval",
                 "id": proposal["id"],
+                "revision": proposal["proposal_revision"],
                 "text": f"May I book your follow-up for {proposal['start_utc']} UTC?",
             }
         if row["status"] == "declined":
@@ -667,6 +669,11 @@ class Store:
         }
         with self.write() as db:
             self._check_owner(db, onboarding_id, connection_id, executor_id)
+            if not db.execute(
+                "SELECT 1 FROM transcript_events WHERE onboarding_id=? AND source_id=? AND kind='final_turn'",
+                (onboarding_id, source_id),
+            ).fetchone():
+                raise StateError("Input must be durable before proposal")
             old = db.execute("SELECT * FROM operations WHERE key=?", (key,)).fetchone()
             if old:
                 if old["payload_json"] != _json(payload):
@@ -731,6 +738,25 @@ class Store:
         }
         with self.write() as db:
             self._check_owner(db, onboarding_id, connection_id, executor_id)
+            input_event = db.execute(
+                "SELECT id,context_json FROM transcript_events WHERE onboarding_id=? AND source_id=? AND kind='final_turn'",
+                (onboarding_id, source_id),
+            ).fetchone()
+            if input_event is None:
+                raise StateError("Input must be durable before approval")
+            context = json.loads(input_event["context_json"] or "{}")
+            action = context.get("action", {})
+            if (
+                action.get("kind") != "approval"
+                or action.get("id") != proposal_id
+                or action.get("revision") != proposal_revision
+            ):
+                raise Conflict("Approval does not match the presented proposal")
+            if not db.execute(
+                "SELECT 1 FROM transcript_events WHERE onboarding_id=? AND role='assistant' AND kind='observed' AND text=? AND id<?",
+                (onboarding_id, action.get("text"), input_event["id"]),
+            ).fetchone():
+                raise Conflict("Proposal was not observed as delivered")
             old = db.execute("SELECT * FROM operations WHERE key=?", (key,)).fetchone()
             if old:
                 if old["payload_json"] != _json(payload):

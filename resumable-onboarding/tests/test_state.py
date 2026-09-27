@@ -123,30 +123,16 @@ def test_booking_and_backup(active, tmp_path):
         .isoformat()
         .replace("+00:00", "")
     )
-    proposal = store.propose(
-        onboarding_id, connection_id, "executor", "proposal", start, "UTC"
+    proposal = prepared_proposal(
+        store, onboarding_id, connection_id, "executor", "proposal", start
     )
     assert store.next_action(onboarding_id)["kind"] == "question"
-    result = store.confirm(
-        onboarding_id,
-        connection_id,
-        "executor",
-        "approval",
-        proposal["id"],
-        proposal["revision"],
-        True,
+    result = approval(
+        store, onboarding_id, connection_id, "executor", "approval", proposal
     )
     assert result["status"] == "booked"
     assert (
-        store.confirm(
-            onboarding_id,
-            connection_id,
-            "executor",
-            "approval",
-            proposal["id"],
-            proposal["revision"],
-            True,
-        )
+        approval(store, onboarding_id, connection_id, "executor", "approval", proposal)
         == result
     )
     backup = tmp_path / "backup.sqlite3"
@@ -178,6 +164,47 @@ def next_monday_noon():
     )
 
 
+def prepared_proposal(store, onboarding_id, connection_id, executor, source, start):
+    store.capture(
+        onboarding_id,
+        connection_id,
+        executor,
+        source,
+        f"I am available {start}",
+        {"action": {"kind": "proposal"}},
+    )
+    return store.propose(onboarding_id, connection_id, executor, source, start, "UTC")
+
+
+def approval(store, onboarding_id, connection_id, executor, source, proposal):
+    text = f"May I book your follow-up for {proposal['start_utc']} UTC?"
+    store.observe_assistant(onboarding_id, connection_id, f"ask-{source}", text, False)
+    store.capture(
+        onboarding_id,
+        connection_id,
+        executor,
+        source,
+        "yes",
+        {
+            "action": {
+                "kind": "approval",
+                "id": proposal["id"],
+                "revision": proposal["revision"],
+                "text": text,
+            }
+        },
+    )
+    return store.confirm(
+        onboarding_id,
+        connection_id,
+        executor,
+        source,
+        proposal["id"],
+        proposal["revision"],
+        True,
+    )
+
+
 def test_competing_booking_and_reschedule_preserves_old_on_failure(tmp_path):
     store = Store(tmp_path / "competition.sqlite3")
     store.migrate()
@@ -190,45 +217,23 @@ def test_competing_booking_and_reschedule_preserves_old_on_failure(tmp_path):
     store.claim(first_connection, "one")
     store.claim(second_connection, "two")
     start = next_monday_noon()
-    first = store.propose(first_id, first_connection, "one", "p1", start, "UTC")
-    second = store.propose(second_id, second_connection, "two", "p2", start, "UTC")
-    store.confirm(
-        first_id, first_connection, "one", "a1", first["id"], first["revision"], True
-    )
+    first = prepared_proposal(store, first_id, first_connection, "one", "p1", start)
+    second = prepared_proposal(store, second_id, second_connection, "two", "p2", start)
+    approval(store, first_id, first_connection, "one", "a1", first)
     with pytest.raises(Conflict):
-        store.confirm(
-            second_id,
-            second_connection,
-            "two",
-            "a2",
-            second["id"],
-            second["revision"],
-            True,
-        )
+        approval(store, second_id, second_connection, "two", "a2", second)
     assert store.rows("followups", second_id)[0]["status"] == "proposed"
     assert store.rows("followups", first_id)[0]["status"] == "booked"
     later = (datetime.fromisoformat(start) + timedelta(days=1)).isoformat()
-    other_slot = store.propose(second_id, second_connection, "two", "p3", later, "UTC")
-    store.confirm(
-        second_id,
-        second_connection,
-        "two",
-        "a3",
-        other_slot["id"],
-        other_slot["revision"],
-        True,
+    other_slot = prepared_proposal(
+        store, second_id, second_connection, "two", "p3", later
     )
-    replacement = store.propose(first_id, first_connection, "one", "p4", later, "UTC")
+    approval(store, second_id, second_connection, "two", "a3", other_slot)
+    replacement = prepared_proposal(
+        store, first_id, first_connection, "one", "p4", later
+    )
     with pytest.raises(Conflict):
-        store.confirm(
-            first_id,
-            first_connection,
-            "one",
-            "a4",
-            replacement["id"],
-            replacement["revision"],
-            True,
-        )
+        approval(store, first_id, first_connection, "one", "a4", replacement)
     assert (
         next(
             row for row in store.rows("followups", first_id) if row["id"] == first["id"]
@@ -249,18 +254,10 @@ def test_summary_revision_and_availability_correction_after_booking(active):
         "historical",
         "current",
     ]
-    proposal = store.propose(
-        onboarding_id, connection_id, "executor", "p1", next_monday_noon(), "UTC"
+    proposal = prepared_proposal(
+        store, onboarding_id, connection_id, "executor", "p1", next_monday_noon()
     )
-    store.confirm(
-        onboarding_id,
-        connection_id,
-        "executor",
-        "a1",
-        proposal["id"],
-        proposal["revision"],
-        True,
-    )
+    approval(store, onboarding_id, connection_id, "executor", "a1", proposal)
     assert store.get(onboarding_id)["status"] == "complete"
     capture(active, "correction", "Actually Thursday works")
     apply(
@@ -284,3 +281,48 @@ def test_isolation_and_invalid_values(active):
     assert store.get(first_id)["revision"] == 0
     assert store.get(second_id)["revision"] == 0
     assert store.rows("operations", first_id) == []
+
+
+def test_booking_requires_observed_exact_proposal(active):
+    store, onboarding_id, _, connection_id = active
+    proposal = prepared_proposal(
+        store, onboarding_id, connection_id, "executor", "p1", next_monday_noon()
+    )
+    text = f"May I book your follow-up for {proposal['start_utc']} UTC?"
+    store.capture(
+        onboarding_id,
+        connection_id,
+        "executor",
+        "yes",
+        "yes",
+        {
+            "action": {
+                "kind": "approval",
+                "id": proposal["id"],
+                "revision": proposal["revision"],
+                "text": text,
+            }
+        },
+    )
+    with pytest.raises(Conflict, match="not observed"):
+        store.confirm(
+            onboarding_id,
+            connection_id,
+            "executor",
+            "yes",
+            proposal["id"],
+            proposal["revision"],
+            True,
+        )
+    assert store.rows("followups", onboarding_id)[0]["status"] == "proposed"
+    store.observe_assistant(onboarding_id, connection_id, "too-late", text, False)
+    with pytest.raises(Conflict, match="not observed"):
+        store.confirm(
+            onboarding_id,
+            connection_id,
+            "executor",
+            "yes",
+            proposal["id"],
+            proposal["revision"],
+            True,
+        )

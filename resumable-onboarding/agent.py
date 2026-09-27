@@ -47,6 +47,7 @@ class OnboardingAgent(Agent):
         self.onboarding_id = onboarding_id
         self.connection_id = connection_id
         self.executor_id = executor_id
+        self.observation_tasks: set[asyncio.Task] = set()
         super().__init__(
             instructions=(
                 "Interpret the customer's latest utterance for onboarding. "
@@ -60,6 +61,8 @@ class OnboardingAgent(Agent):
     async def on_user_turn_completed(
         self, turn_ctx: ChatContext, new_message: ChatMessage
     ) -> None:
+        if self.observation_tasks:
+            await asyncio.gather(*self.observation_tasks)
         action = await asyncio.to_thread(self.store.next_action, self.onboarding_id)
         context = {
             "action": action,
@@ -167,11 +170,6 @@ class OnboardingAgent(Agent):
             action = context["action"]
             if action["kind"] != "approval":
                 raise StateError("No proposal was presented for this turn")
-            proposal = next(
-                row
-                for row in self.store.rows("followups", self.onboarding_id)
-                if row["id"] == action["id"]
-            )
             result = await asyncio.to_thread(
                 self.store.confirm,
                 self.onboarding_id,
@@ -179,7 +177,7 @@ class OnboardingAgent(Agent):
                 self.executor_id,
                 source_id,
                 action["id"],
-                proposal["proposal_revision"],
+                action["revision"],
                 approved,
             )
             return json.dumps(result)
@@ -312,7 +310,7 @@ async def entrypoint(ctx: JobContext) -> None:
             and item.role == "assistant"
             and item.text_content
         ):
-            asyncio.create_task(
+            task = asyncio.create_task(
                 asyncio.to_thread(
                     store.observe_assistant,
                     onboarding_id,
@@ -322,6 +320,13 @@ async def entrypoint(ctx: JobContext) -> None:
                     bool(item.interrupted),
                 )
             )
+            agent.observation_tasks.add(task)
+
+            def clear_success(done: asyncio.Task) -> None:
+                if not done.cancelled() and done.exception() is None:
+                    agent.observation_tasks.discard(done)
+
+            task.add_done_callback(clear_success)
 
     options = (
         room_io.RoomOptions(participant_identity=participant)
