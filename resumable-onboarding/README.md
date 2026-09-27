@@ -16,6 +16,10 @@ uv run python cli.py doctor
 ./scripts/start-session.sh
 ```
 
+If `uv` is installed at `~/.local/bin/uv` but your shell cannot find it, run
+`export PATH="$HOME/.local/bin:$PATH"` before the setup commands. Both scripts
+also find `~/.local/bin/uv` directly when it is absent from `PATH`.
+
 `start-session.sh` starts the native LiveKit text console and creates a durable customer session. It does not need the LiveKit server or audio hardware. For real RTC rooms, start a self-hosted LiveKit server and run `uv run python agent.py start` in another terminal. The existing project-owned `resumable-onboarding-livekit` Docker container can be started with `docker start resumable-onboarding-livekit`. Runtime state stays in ignored `run/` and `data/`.
 
 For a production host, configure a reachable TLS WebSocket address, TURN, firewall, and certificates using the [self-hosted deployment guide](https://docs.livekit.io/transport/self-hosting/deployment/). The `ws://localhost:7880` default is for local testing. A second device cannot use its own `localhost` to reach this host. Use a compatible LiveKit client with a secure reachable server address. Never put the server API secret on the client.

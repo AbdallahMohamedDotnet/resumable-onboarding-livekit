@@ -4,6 +4,14 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 uv_bin="${UV_BIN:-uv}"
+if ! command -v "$uv_bin" >/dev/null 2>&1; then
+  if [[ "$uv_bin" == uv && -x "$HOME/.local/bin/uv" ]]; then
+    uv_bin="$HOME/.local/bin/uv"
+  else
+    echo 'uv is required. Install it in ~/.local/bin or set UV_BIN.' >&2
+    exit 1
+  fi
+fi
 agent_pid_file="$root/run/agent.pid"
 live=0
 if [[ "${1:-}" == --live ]]; then
