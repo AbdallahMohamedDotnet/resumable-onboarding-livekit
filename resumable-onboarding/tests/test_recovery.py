@@ -1,5 +1,6 @@
 """Real SIGKILL checkpoints against a temporary SQLite database."""
 
+import json
 import os
 import select
 import signal
@@ -67,12 +68,21 @@ def worker(stage: str, path: str, onboarding_id: str, connection_id: str) -> Non
             proposal["proposal_revision"],
             True,
         )
+    elif stage == "after_summary":
+        store.summary(onboarding_id)
     print("CHECKPOINT", flush=True)
     signal.pause()
 
 
 @pytest.mark.parametrize(
-    "stage", ["after_input", "inside_transaction", "after_state", "after_booking"]
+    "stage",
+    [
+        "after_input",
+        "inside_transaction",
+        "after_state",
+        "after_booking",
+        "after_summary",
+    ],
 )
 def test_sigkill_recovery(tmp_path, stage):
     path = tmp_path / "crash.sqlite3"
@@ -148,7 +158,7 @@ def test_sigkill_recovery(tmp_path, stage):
     reopened.migrate()
     assert reopened.integrity() == "ok"
     assert len(reopened.rows("transcript_events", onboarding_id)) == (
-        3 if stage == "after_booking" else 1
+        3 if stage == "after_booking" else 0 if stage == "after_summary" else 1
     )
     if stage == "after_state":
         assert reopened.get(onboarding_id)["state"]["customer.name"]["value"] == "Ahmed"
@@ -172,6 +182,14 @@ def test_sigkill_recovery(tmp_path, stage):
             == "booked"
         )
         assert len(reopened.rows("followups", onboarding_id)) == 1
+    elif stage == "after_summary":
+        saved = reopened.rows("summaries", onboarding_id)
+        assert len(saved) == 1
+        assert (
+            reopened.summary(onboarding_id)["generated_at"]
+            == json.loads(saved[0]["summary_json"])["generated_at"]
+        )
+        assert len(reopened.rows("summaries", onboarding_id)) == 1
     else:
         assert reopened.get(onboarding_id)["revision"] == 0
         assert len(reopened.pending_inputs(onboarding_id)) == 1
@@ -190,7 +208,6 @@ if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "worker":
 )
 def test_real_job_sigkill_and_takeover(tmp_path, monkeypatch):
     import asyncio
-    import json
     import time
 
     from dotenv import dotenv_values
