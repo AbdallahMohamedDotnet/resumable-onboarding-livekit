@@ -113,3 +113,116 @@ def test_sigkill_recovery(tmp_path, stage):
 
 if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "worker":
     worker(*sys.argv[2:])
+
+
+@pytest.mark.live
+@pytest.mark.skipif(
+    os.getenv("RUN_LIVEKIT_ROOM_TEST") != "1",
+    reason="Requires self-hosted LiveKit server and explicit opt-in",
+)
+def test_real_job_sigkill_and_takeover(tmp_path):
+    import asyncio
+    import json
+    import time
+
+    from dotenv import dotenv_values
+    from livekit import api
+
+    from state import Unauthorized
+
+    root = Path(__file__).resolve().parents[1]
+    config = dotenv_values(root / ".env.local")
+    env = {
+        **os.environ,
+        **{key: value for key, value in config.items() if value is not None},
+    }
+    env["ONBOARDING_DB_PATH"] = str(tmp_path / "room.sqlite3")
+    log_path = tmp_path / "worker.log"
+    store = Store(env["ONBOARDING_DB_PATH"])
+    store.migrate()
+    onboarding_id, credential = store.create()
+    first_room = "test-" + onboarding_id
+    first_connection, _ = store.connect_attempt(
+        onboarding_id, credential, first_room, "first-device"
+    )
+    with log_path.open("w") as log:
+        worker = subprocess.Popen(
+            [sys.executable, str(root / "agent.py"), "start"],
+            cwd=root,
+            env=env,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    try:
+        deadline = time.monotonic() + 30
+        while "registered worker" not in log_path.read_text():
+            assert worker.poll() is None, log_path.read_text()[-1500:]
+            assert time.monotonic() < deadline, log_path.read_text()[-1500:]
+            time.sleep(0.1)
+
+        async def dispatch(room, connection_id):
+            async with api.LiveKitAPI(
+                url=env["LIVEKIT_URL"],
+                api_key=env["LIVEKIT_API_KEY"],
+                api_secret=env["LIVEKIT_API_SECRET"],
+            ) as livekit:
+                await livekit.room.create_room(api.CreateRoomRequest(name=room))
+                await livekit.agent_dispatch.create_dispatch(
+                    api.CreateAgentDispatchRequest(
+                        agent_name="resumable-onboarding",
+                        room=room,
+                        metadata=json.dumps(
+                            {
+                                "onboarding_id": onboarding_id,
+                                "connection_id": connection_id,
+                            }
+                        ),
+                    )
+                )
+
+        asyncio.run(dispatch(first_room, first_connection))
+        while True:
+            first = next(
+                c
+                for c in store.rows("connections", onboarding_id)
+                if c["id"] == first_connection
+            )
+            if first["job_pid"]:
+                break
+            assert time.monotonic() < deadline, log_path.read_text()[-1500:]
+            time.sleep(0.1)
+        assert os.getpgid(first["job_pid"]) == worker.pid
+        os.kill(first["job_pid"], signal.SIGKILL)
+        second_room = "test-next-" + onboarding_id
+        second_connection, generation = store.connect_attempt(
+            onboarding_id, credential, second_room, "second-device"
+        )
+        assert generation == 2
+        asyncio.run(dispatch(second_room, second_connection))
+        deadline = time.monotonic() + 30
+        while True:
+            second = next(
+                c
+                for c in store.rows("connections", onboarding_id)
+                if c["id"] == second_connection
+            )
+            if second["job_pid"] and second["executor_id"]:
+                break
+            assert time.monotonic() < deadline, log_path.read_text()[-1500:]
+            time.sleep(0.1)
+        with pytest.raises(Unauthorized):
+            store.capture(
+                onboarding_id,
+                first_connection,
+                first["executor_id"],
+                "late",
+                "late",
+                {},
+            )
+        assert store.integrity() == "ok"
+        assert store.get(onboarding_id)["revision"] == 0
+    finally:
+        if worker.poll() is None:
+            os.killpg(worker.pid, signal.SIGTERM)
+            worker.wait(timeout=10)
