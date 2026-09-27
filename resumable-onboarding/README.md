@@ -8,41 +8,40 @@ Install Docker, the [LiveKit CLI](https://docs.livekit.io/reference/developer-to
 
 ```bash
 cd resumable-onboarding
-./scripts/setup.sh
+uv sync --locked
+test -f .env.local || cp .env.example .env.local
 # Edit .env.local. Set a strong LIVEKIT_API_SECRET, an OpenRouter model that
 # supports tool calls, OPENROUTER_API_KEY, ELEVEN_API_KEY, and a voice ID.
-./scripts/doctor.sh
-./scripts/start.sh all
+uv run python cli.py doctor
+./scripts/start-session.sh
 ```
 
-`setup.sh` creates `.env.local` from `.env.example` if absent and never resets the database. The local LiveKit server runs as the project-owned `resumable-onboarding-livekit` Docker container with host networking. Its config and agent PID stay in ignored `run/`. The agent starts through the native LiveKit Agents runtime. The runner checks server and worker readiness. `./scripts/stop.sh all` and `./scripts/restart.sh all` affect only that container and the tracked agent process group. `./scripts/restart.sh agent` leaves the server and database running.
+`start-session.sh` starts the native LiveKit text console and creates a durable customer session. It does not need the LiveKit server or audio hardware. For real RTC rooms, start a self-hosted LiveKit server and run `uv run python agent.py start` in another terminal. The existing project-owned `resumable-onboarding-livekit` Docker container can be started with `docker start resumable-onboarding-livekit`. Runtime state stays in ignored `run/` and `data/`.
 
 For a production host, configure a reachable TLS WebSocket address, TURN, firewall, and certificates using the [self-hosted deployment guide](https://docs.livekit.io/transport/self-hosting/deployment/). The `ws://localhost:7880` default is for local testing. A second device cannot use its own `localhost` to reach this host. Use a compatible LiveKit client with a secure reachable server address. Never put the server API secret on the client.
 
 ## New, resume, and inspect
 
 ```bash
-./scripts/new.sh
-./scripts/inspect.sh sessions
-./scripts/inspect.sh state ONBOARDING_ID
-./scripts/inspect.sh transcript ONBOARDING_ID --role user
-./scripts/inspect.sh operations ONBOARDING_ID
-./scripts/inspect.sh followups ONBOARDING_ID
-./scripts/inspect.sh summary ONBOARDING_ID
-./scripts/inspect.sh export ONBOARDING_ID
-./scripts/resume.sh ONBOARDING_ID
-./scripts/backup.sh backups/onboarding.sqlite3
-./scripts/inspect.sh rotate-resume-credential ONBOARDING_ID
-./scripts/inspect.sh reconcile
+uv run python cli.py new
+uv run python cli.py sessions
+uv run python cli.py state ONBOARDING_ID
+uv run python cli.py transcript ONBOARDING_ID --role user
+uv run python cli.py operations ONBOARDING_ID
+uv run python cli.py followups ONBOARDING_ID
+uv run python cli.py summary ONBOARDING_ID
+uv run python cli.py export ONBOARDING_ID
+uv run python cli.py resume ONBOARDING_ID
+uv run python cli.py backup backups/onboarding.sqlite3
+uv run python cli.py rotate-resume-credential ONBOARDING_ID
+uv run python cli.py reconcile
 ```
 
 `new` prints an opaque resume credential once, plus a 15-minute room-scoped client token. Store the credential securely. `resume` asks for it without a shell argument, validates its hash, creates a fresh room and participant, advances a database generation, and issues a new token. The newest authorized device wins. The operator-only rotation command recovers from interrupted credential delivery. Names or contact details do not authorize a resume.
 
 `state`, `transcript`, `operations`, `followups`, `summary`, and `export` are separate views. Add `--json` before the subcommand for plain JSON output. `transcript --follow` tails observed events. The summary is deterministic from canonical state and the actual booking, with its source revision and unresolved fields. Historical summaries remain in SQLite. Corrections preserve earlier transcript turns and record old/new values in an operation result. An availability correction invalidates a pending proposal; after a booking it marks rescheduling required and retains the old booking until a replacement is approved.
 
-For a trusted local voice/text console, first create an onboarding, then run `./scripts/console.sh --text` or `./scripts/console.sh`. The shortcut prompts for ID and credential. Console mode simulates a room and does not establish real RTC or cross-device behavior. For real rooms, use the token from `new` or `resume` in an existing compatible LiveKit client.
-
-To take a customer session in the terminal without STT, TTS, or audio devices, run `./scripts/take.sh`. Type replies to the questions. The command prints a private resume file path in `run/`; after leaving with Ctrl+C, run `./scripts/take.sh --resume run/taker-ONBOARDING_ID.json` to continue. This test mode still uses the configured OpenRouter model and the durable SQLite workflow. It simulates a room and does not prove browser or device reconnection.
+To take a customer session in the terminal without STT, TTS, or audio devices, run `./scripts/start-session.sh`. Type replies to the questions. The command prints a private resume file path in `run/`; after leaving with Ctrl+C, run `./scripts/start-session.sh --resume run/taker-ONBOARDING_ID.json` to continue. This test mode still uses the configured OpenRouter model and the durable SQLite workflow. It simulates a room and does not prove browser or device reconnection. For real rooms, use the token from `new` or `resume` in an existing compatible LiveKit client.
 
 ## Durability and recovery
 
@@ -55,17 +54,16 @@ Speech not saved before a crash cannot be reconstructed. An unfinished utterance
 ## Tests and failure checks
 
 ```bash
-./scripts/test.sh
-./scripts/simulate.sh
-./scripts/inspect.sh state ONBOARDING_ID
-./scripts/restart.sh agent
-./scripts/inspect.sh reconcile
-./scripts/restart.sh all
+uv run python -m pytest -q
+./scripts/simulate-process-kill.sh
+./scripts/simulate-process-kill.sh --live  # needs the local LiveKit server
+uv run python cli.py state ONBOARDING_ID
+uv run python cli.py reconcile
 ```
 
-`simulate.sh` executes five real subprocess `SIGKILL` checkpoints on an isolated temporary database: after input commit, inside a business transaction, after answer commit, after booking commit before confirmation, and after summary commit. It reopens the same file and checks the transcript, canonical revision, pending work, operations, next action, booking and summary idempotency, and `PRAGMA integrity_check`.
+`simulate-process-kill.sh` executes five real subprocess `SIGKILL` checkpoints on an isolated temporary database: after input commit, inside a business transaction, after answer commit, after booking commit before confirmation, and after summary commit. It reopens the same file and checks the transcript, canonical revision, pending work, operations, next action, booking and summary idempotency, and `PRAGMA integrity_check`.
 
-With the local server running, `RUN_LIVEKIT_ROOM_TEST=1 ./scripts/simulate.sh` additionally launches a real agent worker against a temporary database, dispatches a job, waits for its recorded job PID, kills that job with `SIGKILL`, reconciles the stale dispatch, and verifies both immediate job reclaim and a new authorized room takeover. The old executor is fenced. The self-hosted server can briefly continue to report a killed job as running, so reconciliation also checks the local owning PID. This test exercises the room and job path up to participant arrival, without provider inference or conversation replay. To inspect device takeover manually, call `resume` again and compare connection generations and rooms. Duplicate dispatch can be checked by repeating `reconcile` and inspecting `connections` and the room's dispatch list. Corrections, duplicate operations, booking competition, and workflow v1/v2 compatibility are covered by offline tests to the extent noted in the test names.
+With the local server running, `./scripts/simulate-process-kill.sh --live` additionally launches a real agent worker against a temporary database, dispatches a job, waits for its recorded job PID, kills that job with `SIGKILL`, reconciles the stale dispatch, and verifies both immediate job reclaim and a new authorized room takeover. It temporarily stops and restores the project-owned background agent if one is running. The old executor is fenced. The self-hosted server can briefly continue to report a killed job as running, so reconciliation also checks the local owning PID. This test exercises the room and job path up to participant arrival, without provider inference or conversation replay. To inspect device takeover manually, call `resume` again and compare connection generations and rooms. Duplicate dispatch can be checked by repeating `reconcile` and inspecting `connections` and the room's dispatch list. Corrections, duplicate operations, booking competition, and workflow v1/v2 compatibility are covered by offline tests to the extent noted in the test names.
 
 Real-room client reconnection, provider failures, and cross-device media require a running server, a client, and provider credentials. They are not covered by the ordinary offline suite. Live OpenRouter/ElevenLabs calls incur provider charges and are never run implicitly by setup or tests.
 
@@ -73,13 +71,13 @@ For manual failure checks with a configured client and providers:
 
 - Temporary disconnect: join with the issued room token, briefly drop the client network, restore it, then inspect `state` and `transcript`. Native LiveKit reconnect should keep the same onboarding.
 - Fresh room or another device: run `resume` with the same ID and credential, join the newly issued room from the other device, and compare `connections`. The server address must be reachable from that device.
-- Agent restart or whole-stack restart: run `./scripts/restart.sh agent` or `./scripts/restart.sh all`, then `./scripts/inspect.sh reconcile` and inspect `operations` and `state`. The SQLite file is preserved.
+- Agent restart or whole-stack restart: restart the background `agent.py start` process or the project-owned Docker server, then run `uv run python cli.py reconcile` and inspect `operations` and `state`. The SQLite file is preserved.
 - Duplicate dispatch: run `reconcile` twice and inspect dispatch IDs in `connections`; identical metadata should reuse a live dispatch.
 - Delayed stale write: `uv run python -m pytest -q tests/test_state.py -k takeover` exercises the database fence. The opt-in real-room crash test also checks it after a killed job.
 - Correction after resume or completion: say “Actually, Thursday works” on the resumed device, then compare `transcript`, `history`, `followups`, and `summary`.
-- Interrupted booking confirmation: `./scripts/simulate.sh -k after_booking` kills after commit and checks that retry returns one booking.
-- Workflow upgrade: `./scripts/test.sh -k workflow_version` checks that a v1 record remains pinned when v2 exists.
-- Database busy: `./scripts/test.sh -k busy_write` holds a real SQLite write lock through the configured five-second timeout and checks that the captured input stays pending without a state revision.
+- Interrupted booking confirmation: `./scripts/simulate-process-kill.sh -k after_booking` kills after commit and checks that retry returns one booking.
+- Workflow upgrade: `uv run python -m pytest -q -k workflow_version` checks that a v1 record remains pinned when v2 exists.
+- Database busy: `uv run python -m pytest -q -k busy_write` holds a real SQLite write lock through the configured five-second timeout and checks that the captured input stays pending without a state revision.
 
 Model failure, TTS failure, and a killed job during a provider-backed reply still require controlled live fault runs. The offline suite proves durable input and committed-state behavior at the documented SQLite checkpoints; it does not substitute for those provider runs.
 
