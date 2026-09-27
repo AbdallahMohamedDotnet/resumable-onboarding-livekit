@@ -295,7 +295,7 @@ class Store:
         return {
             "kind": "proposal",
             "id": "followup.proposal",
-            "text": "I can propose a follow-up time.",
+            "text": "What exact date and time would you like for the follow-up?",
         }
 
     def connect_attempt(
