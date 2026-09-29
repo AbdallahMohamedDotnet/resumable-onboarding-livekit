@@ -7,6 +7,7 @@ from agent import OnboardingAgent
 from state import Store
 
 
+# Verify text input is saved before the model provider is called.
 @pytest.mark.asyncio
 async def test_text_input_is_durable_before_llm_request(tmp_path, monkeypatch):
     store = Store(tmp_path / "agent.sqlite3")
@@ -19,6 +20,7 @@ async def test_text_input_is_durable_before_llm_request(tmp_path, monkeypatch):
     agent = OnboardingAgent(store, onboarding_id, connection_id, "executor")
     message = ChatMessage(role="user", content=["My name is Alice Example."])
 
+    # Check for persisted input when the fake provider is invoked.
     async def observe_provider_call(self, chat_ctx, tools, model_settings):
         pending = store.pending_inputs(onboarding_id)
         assert len(pending) == 1
@@ -35,6 +37,7 @@ async def test_text_input_is_durable_before_llm_request(tmp_path, monkeypatch):
     assert len(store.pending_inputs(onboarding_id)) == 1
 
 
+# Verify the native turn hook saves input before generating a reply.
 @pytest.mark.asyncio
 async def test_native_turn_hook_persists_before_reply(tmp_path):
     store = Store(tmp_path / "agent.sqlite3")

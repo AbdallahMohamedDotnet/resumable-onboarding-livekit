@@ -32,6 +32,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env.local"))
 server = AgentServer()
 
 
+# Read a required environment setting or report that it is missing.
 def required(name: str) -> str:
     value = os.getenv(name)
     if not value:
@@ -40,6 +41,7 @@ def required(name: str) -> str:
 
 
 class OnboardingAgent(Agent):
+    # Bind the agent to its store, onboarding, connection, and executor.
     def __init__(
         self, store: Store, onboarding_id: str, connection_id: str, executor_id: str
     ):
@@ -58,6 +60,7 @@ class OnboardingAgent(Agent):
             )
         )
 
+    # Persist the completed customer turn and its action context.
     async def on_user_turn_completed(
         self, turn_ctx: ChatContext, new_message: ChatMessage
     ) -> None:
@@ -84,6 +87,7 @@ class OnboardingAgent(Agent):
             context,
         )
 
+    # Process a durable turn through the selected business tool and reply.
     async def llm_node(
         self,
         chat_ctx: ChatContext,
@@ -158,6 +162,7 @@ class OnboardingAgent(Agent):
             ]
             return
 
+        # Save facts and explicit corrections extracted from this turn.
         @function_tool(
             name="save_answers",
             description="Save all facts from this turn. answers_json maps field IDs to objects with value and optional status. correction_ids identifies explicit corrections.",
@@ -180,6 +185,7 @@ class OnboardingAgent(Agent):
             )
             return json.dumps(result)
 
+        # Apply the customer decision to the presented follow-up proposal.
         @function_tool(
             name="confirm_followup",
             description="Confirm or decline only the exact durable proposal presented for this turn after explicit customer approval or refusal.",
@@ -200,6 +206,7 @@ class OnboardingAgent(Agent):
             )
             return json.dumps(result)
 
+        # Save the customer's requested local follow-up time.
         @function_tool(
             name="propose_followup",
             description="Propose an exact future date and time supplied by the customer. start_local is ISO local date and time; timezone is an IANA timezone.",
@@ -248,6 +255,7 @@ class OnboardingAgent(Agent):
                 yield chunk
 
 
+# Start a LiveKit job, recover pending input, and run the agent session.
 @server.rtc_session(
     agent_name=os.getenv("ONBOARDING_AGENT_NAME", "resumable-onboarding")
 )
@@ -283,6 +291,7 @@ async def entrypoint(ctx: JobContext) -> None:
         os.getpid(),
     )
 
+    # Keep this job's connection ownership lease active.
     async def renew_lease() -> None:
         while True:
             await asyncio.sleep(20)
@@ -294,6 +303,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
     lease_task = asyncio.create_task(renew_lease())
 
+    # Cancel and await the lease renewal task during shutdown.
     async def stop_lease() -> None:
         lease_task.cancel()
         try:
@@ -333,6 +343,7 @@ async def entrypoint(ctx: JobContext) -> None:
         turn_handling=turn_handling,
     )
 
+    # Persist assistant messages emitted by the LiveKit session.
     @session.on("conversation_item_added")
     def observe(event) -> None:
         item = event.item
@@ -353,6 +364,7 @@ async def entrypoint(ctx: JobContext) -> None:
             )
             agent.observation_tasks.add(task)
 
+            # Remove a successfully completed observation task.
             def clear_success(done: asyncio.Task) -> None:
                 if not done.cancelled() and done.exception() is None:
                     agent.observation_tasks.discard(done)

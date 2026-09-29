@@ -21,6 +21,7 @@ STATUSES = {"missing", "answered", "unknown", "declined", "needs_clarification"}
 COMPLETE = {"answered", "unknown", "declined"}
 
 
+# Build a workflow field definition with its completion rules.
 def _field(
     field_id: str, question: str, kind: str = "text", required: bool = True
 ) -> dict:
@@ -118,23 +119,28 @@ MIGRATIONS = [
 ]
 
 
+# Return the current UTC timestamp for durable records.
 def now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+# Resolve the configured SQLite path against the project root.
 def database_path(value: str | None = None) -> Path:
     raw = Path(value or os.getenv("ONBOARDING_DB_PATH", "data/onboarding.sqlite3"))
     return raw if raw.is_absolute() else ROOT / raw
 
 
+# Serialize a value consistently for stored JSON comparisons.
 def _json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 class Store:
+    # Set the database path used by this store.
     def __init__(self, path: str | Path | None = None):
         self.path = database_path(str(path) if path is not None else None)
 
+    # Open a configured SQLite connection and close it afterward.
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -165,6 +171,7 @@ class Store:
         finally:
             db.close()
 
+    # Run a SQLite write transaction with locking and rollback handling.
     @contextmanager
     def write(self) -> Iterator[sqlite3.Connection]:
         with self.connect() as db:
@@ -177,6 +184,7 @@ class Store:
             else:
                 db.commit()
 
+    # Apply pending database schema migrations.
     def migrate(self) -> None:
         with self.write() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
@@ -190,6 +198,7 @@ class Store:
         if self.path.exists():
             self.path.chmod(0o600)
 
+    # Create an onboarding session and its resume credential.
     def create(self, workflow_version: int = 1) -> tuple[str, str]:
         if workflow_version not in WORKFLOWS:
             raise UnsupportedWorkflow(str(workflow_version))
@@ -214,12 +223,14 @@ class Store:
             )
         return onboarding_id, credential
 
+    # Check whether a resume credential matches this onboarding.
     def verify_credential(self, onboarding_id: str, credential: str) -> bool:
         row = self.get(onboarding_id)
         return hmac.compare_digest(
             row["credential_hash"], hashlib.sha256(credential.encode()).hexdigest()
         )
 
+    # Replace and return the onboarding resume credential.
     def rotate_credential(self, onboarding_id: str) -> str:
         credential = secrets.token_urlsafe(32)
         with self.write() as db:
@@ -230,6 +241,7 @@ class Store:
                 raise StateError("Unknown onboarding")
         return credential
 
+    # Load an onboarding record with its workflow and current answers.
     def get(self, onboarding_id: str) -> dict:
         with self.connect() as db:
             row = db.execute(
@@ -244,6 +256,7 @@ class Store:
             raise UnsupportedWorkflow(str(result["workflow_version"]))
         return result
 
+    # Determine the next question or follow-up action from saved state.
     def next_action(self, onboarding_id: str) -> dict:
         row = self.get(onboarding_id)
         declined = (
@@ -300,6 +313,7 @@ class Store:
             "text": "What exact date and time would you like for the follow-up?",
         }
 
+    # Authorize a connection attempt and advance its generation.
     def connect_attempt(
         self, onboarding_id: str, credential: str, room: str, participant: str
     ) -> tuple[str, int]:
@@ -333,6 +347,7 @@ class Store:
             )
         return connection_id, generation
 
+    # Claim or renew ownership of a connection for one executor.
     def claim(
         self,
         connection_id: str,
@@ -368,6 +383,7 @@ class Store:
                 (executor_id, until, job_id, job_pid, connection_id),
             )
 
+    # Record the LiveKit dispatch assigned to a connection.
     def set_dispatch(self, connection_id: str, dispatch_id: str) -> None:
         with self.write() as db:
             if not db.execute(
@@ -376,6 +392,7 @@ class Store:
             ).rowcount:
                 raise Unauthorized("Stale connection")
 
+    # Reject writes from an executor that no longer owns the connection.
     def _check_owner(
         self,
         db: sqlite3.Connection,
@@ -396,12 +413,14 @@ class Store:
         ):
             raise Unauthorized("Stale connection or executor")
 
+    # Verify the current executor still owns the connection.
     def assert_owner(
         self, onboarding_id: str, connection_id: str, executor_id: str
     ) -> None:
         with self.connect() as db:
             self._check_owner(db, onboarding_id, connection_id, executor_id)
 
+    # Persist a customer turn before any model processing.
     def capture(
         self,
         onboarding_id: str,
@@ -436,6 +455,7 @@ class Store:
                 raise Conflict("Source identity reused with different text")
             return row["id"]
 
+    # Validate and normalize an answer for its workflow field.
     def _validate(self, field: dict, item: dict) -> dict:
         status = item.get("status", "answered")
         if status not in STATUSES:
@@ -456,6 +476,7 @@ class Store:
             raise StateError("Non-answer statuses require null value")
         return {"status": status, "value": value}
 
+    # Apply extracted answers and corrections as one durable operation.
     def apply_answers(
         self,
         onboarding_id: str,
@@ -556,6 +577,7 @@ class Store:
             )
             return result
 
+    # Find captured customer turns awaiting a completed operation.
     def pending_inputs(self, onboarding_id: str) -> list[dict]:
         with self.connect() as db:
             rows = db.execute(
@@ -564,6 +586,7 @@ class Store:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    # Look up a previously recorded operation for a customer turn.
     def operation(self, onboarding_id: str, source_id: str, kind: str) -> dict | None:
         with self.connect() as db:
             row = db.execute(
@@ -572,6 +595,7 @@ class Store:
             ).fetchone()
         return dict(row) if row else None
 
+    # Save an assistant message and whether it was interrupted.
     def observe_assistant(
         self,
         onboarding_id: str,
@@ -594,6 +618,7 @@ class Store:
                 ),
             )
 
+    # Persist a specific follow-up slot proposed from the customer turn.
     def propose(
         self,
         onboarding_id: str,
@@ -707,6 +732,7 @@ class Store:
             )
             return result
 
+    # Book or decline the exact follow-up proposal the customer saw.
     def confirm(
         self,
         onboarding_id: str,
@@ -818,6 +844,7 @@ class Store:
             )
             return result
 
+    # Build and cache a summary of the current onboarding revision.
     def summary(self, onboarding_id: str) -> dict:
         with self.write() as db:
             row = db.execute(
@@ -907,6 +934,7 @@ class Store:
             ).fetchone()[0]
             return json.loads(saved)
 
+    # List onboarding records from an allowed table.
     def rows(self, table: str, onboarding_id: str) -> list[dict]:
         if table not in {
             "transcript_events",
@@ -930,6 +958,7 @@ class Store:
                 )
             ]
 
+    # List all onboarding sessions for the operator CLI.
     def list_onboardings(self) -> list[dict]:
         with self.connect() as db:
             return [
@@ -939,12 +968,14 @@ class Store:
                 )
             ]
 
+    # Copy the database into a consistent backup file.
     def backup(self, target: Path) -> None:
         target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with self.connect() as source, sqlite3.connect(target) as destination:
             source.backup(destination)
         target.chmod(0o600)
 
+    # Run SQLite integrity checks on the database.
     def integrity(self) -> str:
         with self.connect() as db:
             return db.execute("PRAGMA integrity_check").fetchone()[0]

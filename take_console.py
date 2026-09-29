@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env.local")
 
 
+# Check whether the device list has both input and output audio.
 def audio_devices_available(output: str) -> bool:
     devices = re.findall(r"^\s*\d+\s+(Input|Output|Both)\s+", output, re.MULTILINE)
     return any(device in {"Input", "Both"} for device in devices) and any(
@@ -24,6 +25,7 @@ def audio_devices_available(output: str) -> bool:
     )
 
 
+# Start or resume a local text or voice onboarding console session.
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--resume", type=Path, metavar="SESSION_FILE")

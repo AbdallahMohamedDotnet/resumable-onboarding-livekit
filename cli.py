@@ -29,6 +29,7 @@ load_dotenv(Path(__file__).resolve().parent / ".env.local")
 console = Console(stderr=False)
 
 
+# Display command results as JSON, a table, or formatted JSON output.
 def show(value, as_json: bool = False) -> None:
     if as_json:
         print(json.dumps(value, indent=2, default=str))
@@ -57,6 +58,7 @@ def show(value, as_json: bool = False) -> None:
         console.print_json(data=value)
 
 
+# Create a short-lived LiveKit room token for the customer participant.
 def token(room: str, participant: str) -> str:
     return (
         api.AccessToken(os.environ["LIVEKIT_API_KEY"], os.environ["LIVEKIT_API_SECRET"])
@@ -71,6 +73,7 @@ def token(room: str, participant: str) -> str:
     )
 
 
+# Reuse a healthy agent dispatch or create one for the connection's room.
 async def dispatch(
     store: Store, onboarding_id: str, connection_id: str, room: str
 ) -> str:
@@ -112,6 +115,7 @@ async def dispatch(
         return result.id
 
 
+# Start an onboarding connection and return the details needed to join its room.
 async def start_connection(store: Store, onboarding_id: str, credential: str) -> dict:
     participant = f"customer-{uuid.uuid4().hex[:16]}"
     room = f"onboarding-{uuid.uuid4().hex}"
@@ -131,6 +135,7 @@ async def start_connection(store: Store, onboarding_id: str, credential: str) ->
     }
 
 
+# Report local database, agent configuration, and LiveKit connectivity checks.
 def doctor(store: Store) -> dict:
     url = (
         os.getenv("LIVEKIT_URL", "")
@@ -168,6 +173,7 @@ def doctor(store: Store) -> dict:
     return checks
 
 
+# Define the operator CLI commands and their arguments.
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Self-hosted resumable onboarding operator CLI"
@@ -199,6 +205,7 @@ def parser() -> argparse.ArgumentParser:
     return p
 
 
+# Run the requested operator command and return a process exit code.
 def main() -> int:
     args = parser().parse_args()
     store = Store()
@@ -225,6 +232,7 @@ def main() -> int:
         elif command in {"transcript", "connections", "operations", "followups"}:
             table = "transcript_events" if command == "transcript" else command
 
+            # Load records and apply any transcript filters from the CLI.
             def records():
                 rows = store.rows(table, args.onboarding_id)
                 if command == "transcript":

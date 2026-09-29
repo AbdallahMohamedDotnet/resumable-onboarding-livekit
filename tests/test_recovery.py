@@ -14,6 +14,7 @@ import pytest
 from state import Store
 
 
+# Run a child process through a chosen crash recovery stage.
 def worker(stage: str, path: str, onboarding_id: str, connection_id: str) -> None:
     store = Store(path)
     if stage == "after_input":
@@ -74,6 +75,7 @@ def worker(stage: str, path: str, onboarding_id: str, connection_id: str) -> Non
     signal.pause()
 
 
+# Verify durable state recovers after the worker is killed.
 @pytest.mark.parametrize(
     "stage",
     [
@@ -201,6 +203,7 @@ if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "worker":
     worker(*sys.argv[2:])
 
 
+# Verify a real job can be replaced after process termination.
 @pytest.mark.live
 @pytest.mark.skipif(
     os.getenv("RUN_LIVEKIT_ROOM_TEST") != "1",
@@ -248,6 +251,7 @@ def test_real_job_sigkill_and_takeover(tmp_path, monkeypatch):
             assert time.monotonic() < deadline, log_path.read_text()[-1500:]
             time.sleep(0.1)
 
+        # Simulate agent dispatch for the takeover test.
         async def dispatch(room, connection_id):
             async with api.LiveKitAPI(
                 url=env["LIVEKIT_URL"],

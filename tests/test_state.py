@@ -6,6 +6,7 @@ import pytest
 from state import Store
 
 
+# Create an active onboarding and claimed connection for tests.
 @pytest.fixture
 def active(tmp_path):
     store = Store(tmp_path / "onboarding.sqlite3")
@@ -18,6 +19,7 @@ def active(tmp_path):
     return store, onboarding_id, credential, connection_id
 
 
+# Verify opening an existing database preserves directory permissions.
 def test_existing_database_directory_permissions_are_preserved(tmp_path):
     shared_dir = tmp_path / "shared"
     shared_dir.mkdir(mode=0o755)
@@ -30,6 +32,7 @@ def test_existing_database_directory_permissions_are_preserved(tmp_path):
     assert store.integrity() == "ok"
 
 
+# Persist a test customer turn and return its source ID.
 def capture(active, source, text="I have some information"):
     store, onboarding_id, _, connection_id = active
     store.capture(
@@ -42,6 +45,7 @@ def capture(active, source, text="I have some information"):
     )
 
 
+# Apply test answers to the active onboarding.
 def apply(active, source, answers, corrections=None):
     store, onboarding_id, _, connection_id = active
     return store.apply_answers(
@@ -55,6 +59,7 @@ def apply(active, source, answers, corrections=None):
     )
 
 
+# Verify multiple answers, replay safety, and explicit corrections.
 def test_multi_field_idempotency_and_correction(active):
     store, onboarding_id, _, connection_id = active
     capture(active, "turn1", "I am Ahmed from Atlas, 25 people")
@@ -96,6 +101,7 @@ def test_multi_field_idempotency_and_correction(active):
     ]
 
 
+# Verify no-op and unknown answers handle revisions correctly.
 def test_noop_unknown_and_revision(active):
     store, onboarding_id, _, _ = active
     capture(active, "u")
@@ -105,6 +111,7 @@ def test_noop_unknown_and_revision(active):
     assert store.next_action(onboarding_id)["id"] == "customer.contact"
 
 
+# Verify a new executor prevents writes from the old one.
 def test_takeover_fences_old_executor(active):
     store, onboarding_id, credential, old_connection = active
     new_connection, generation = store.connect_attempt(
@@ -117,6 +124,7 @@ def test_takeover_fences_old_executor(active):
     assert store.integrity() == "ok"
 
 
+# Verify a dead job can reclaim its connection.
 def test_dead_job_can_reclaim_same_connection(active):
     store, onboarding_id, _, connection_id = active
     with store.write() as db:
@@ -128,6 +136,7 @@ def test_dead_job_can_reclaim_same_connection(active):
         store.capture(onboarding_id, connection_id, "executor", "old", "old", {})
 
 
+# Verify follow-up booking and database backup.
 def test_booking_and_backup(active, tmp_path):
     store, onboarding_id, _, connection_id = active
     start = (
@@ -154,6 +163,7 @@ def test_booking_and_backup(active, tmp_path):
     assert len(Store(backup).rows("followups", onboarding_id)) == 1
 
 
+# Verify workflow versions and unsupported versions are handled.
 def test_workflow_version_and_unsupported(active):
     store, onboarding_id, _, _ = active
     assert "company.budget" not in store.get(onboarding_id)["state"]
@@ -168,6 +178,7 @@ def test_workflow_version_and_unsupported(active):
     assert store.integrity() == "ok"
 
 
+# Return a future Monday at noon for booking tests.
 def next_monday_noon():
     return (
         (datetime.now(UTC) + timedelta(days=8 - datetime.now(UTC).weekday()))
@@ -177,6 +188,7 @@ def next_monday_noon():
     )
 
 
+# Create an observed follow-up proposal for a test.
 def prepared_proposal(store, onboarding_id, connection_id, executor, source, start):
     store.capture(
         onboarding_id,
@@ -189,6 +201,7 @@ def prepared_proposal(store, onboarding_id, connection_id, executor, source, sta
     return store.propose(onboarding_id, connection_id, executor, source, start, "UTC")
 
 
+# Capture a test customer response to a proposal.
 def approval(store, onboarding_id, connection_id, executor, source, proposal):
     text = f"May I book your follow-up for {proposal['start_utc']} UTC?"
     store.observe_assistant(onboarding_id, connection_id, f"ask-{source}", text, False)
@@ -218,6 +231,7 @@ def approval(store, onboarding_id, connection_id, executor, source, proposal):
     )
 
 
+# Verify booking conflicts leave an earlier reservation intact.
 def test_competing_booking_and_reschedule_preserves_old_on_failure(tmp_path):
     store = Store(tmp_path / "competition.sqlite3")
     store.migrate()
@@ -256,6 +270,7 @@ def test_competing_booking_and_reschedule_preserves_old_on_failure(tmp_path):
     assert store.integrity() == "ok"
 
 
+# Verify summaries refresh after booking and availability changes.
 def test_summary_revision_and_availability_correction_after_booking(active):
     store, onboarding_id, _, connection_id = active
     first_summary = store.summary(onboarding_id)
@@ -285,6 +300,7 @@ def test_summary_revision_and_availability_correction_after_booking(active):
     assert store.next_action(onboarding_id)["kind"] == "question"
 
 
+# Verify onboarding isolation and rejection of invalid answers.
 def test_isolation_and_invalid_values(active):
     store, first_id, _, _ = active
     second_id, _ = store.create()
@@ -296,6 +312,7 @@ def test_isolation_and_invalid_values(active):
     assert store.rows("operations", first_id) == []
 
 
+# Verify booking needs the exact proposal shown to the customer.
 def test_booking_requires_observed_exact_proposal(active):
     store, onboarding_id, _, connection_id = active
     proposal = prepared_proposal(
@@ -341,6 +358,7 @@ def test_booking_requires_observed_exact_proposal(active):
         )
 
 
+# Verify declining follow-up can finish without a timezone.
 def test_declined_followup_finishes_without_timezone(active):
     store, onboarding_id, _, _ = active
     capture(active, "decline", "I do not want a follow-up")
@@ -356,6 +374,7 @@ def test_declined_followup_finishes_without_timezone(active):
     assert store.summary(onboarding_id)["partial"] is False
 
 
+# Verify zero values and busy writes keep input recoverable.
 def test_zero_value_and_busy_write_preserve_pending_input(active):
     import sqlite3
 
