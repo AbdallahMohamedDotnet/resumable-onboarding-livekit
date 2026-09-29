@@ -1,10 +1,12 @@
+import asyncio
 import json
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from livekit.agents import Agent, ChatContext, ChatMessage
 
-from agent import OnboardingAgent
-from state import Store
+from agent import OnboardingAgent, end_call_after_playout
+from state import WORKFLOWS, Store
 
 
 # Verify text input is saved before the model provider is called.
@@ -73,3 +75,63 @@ async def test_native_turn_hook_persists_before_reply(tmp_path):
             chunk
             async for chunk in agent.llm_node(ChatContext(items=[message]), [], None)
         ]
+
+
+@pytest.mark.asyncio
+async def test_call_ends_only_after_completed_reply(tmp_path):
+    store = Store(tmp_path / "agent.sqlite3")
+    store.migrate()
+    onboarding_id, credential = store.create()
+    connection_id, _ = store.connect_attempt(onboarding_id, credential, "room", "person")
+    store.claim(connection_id, "executor")
+
+    class Speech:
+        interrupted = False
+
+        def __init__(self):
+            self.played = False
+            self.release = asyncio.Event()
+
+        async def wait_for_playout(self):
+            await self.release.wait()
+            self.played = True
+
+        def exception(self):
+            return None
+
+    ctx = Mock()
+    ctx.is_fake_job.return_value = False
+    ctx.delete_room = AsyncMock()
+    speech = Speech()
+    speech.release.set()
+    args = (store, onboarding_id, connection_id, "executor", ctx, set())
+    assert not await end_call_after_playout(speech, *args)
+    assert speech.played
+    ctx.delete_room.assert_not_awaited()
+
+    answers = {
+        field["id"]: {"value": field["id"]}
+        for field in WORKFLOWS[1]
+        if field["required"] and field["id"] != "followup.customer_timezone"
+    }
+    answers["followup.availability"] = {"status": "declined", "value": None}
+    store.capture(
+        onboarding_id,
+        connection_id,
+        "executor",
+        "final-turn",
+        "I do not want a follow-up",
+        {"action": store.next_action(onboarding_id)},
+    )
+    store.apply_answers(
+        onboarding_id, connection_id, "executor", "final-turn", answers, 0
+    )
+    assert store.next_action(onboarding_id)["kind"] == "complete"
+    closing_speech = Speech()
+    closing = asyncio.create_task(end_call_after_playout(closing_speech, *args))
+    await asyncio.sleep(0)
+    ctx.delete_room.assert_not_awaited()
+    closing_speech.release.set()
+    assert await closing
+    ctx.delete_room.assert_awaited_once()
+    ctx.shutdown.assert_called_once_with("Onboarding complete")

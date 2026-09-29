@@ -255,6 +255,38 @@ class OnboardingAgent(Agent):
                 yield chunk
 
 
+async def end_call_after_playout(
+    speech,
+    store: Store,
+    onboarding_id: str,
+    connection_id: str,
+    executor_id: str,
+    ctx: JobContext,
+    observation_tasks: set[asyncio.Task],
+) -> bool:
+    """End a completed onboarding only after its closing reply is heard."""
+    await speech.wait_for_playout()
+    if speech.interrupted or speech.exception() is not None:
+        return False
+    try:
+        await asyncio.to_thread(
+            store.assert_owner, onboarding_id, connection_id, executor_id
+        )
+    except PermissionError:
+        return False
+    if await asyncio.to_thread(store.pending_inputs, onboarding_id):
+        return False
+    action = await asyncio.to_thread(store.next_action, onboarding_id)
+    if action["kind"] != "complete":
+        return False
+    if observation_tasks:
+        await asyncio.gather(*observation_tasks)
+    if not ctx.is_fake_job():
+        await ctx.delete_room()
+    ctx.shutdown("Onboarding complete")
+    return True
+
+
 # Start a LiveKit job, recover pending input, and run the agent session.
 @server.rtc_session(
     agent_name=os.getenv("ONBOARDING_AGENT_NAME", "resumable-onboarding")
@@ -325,6 +357,7 @@ async def entrypoint(ctx: JobContext) -> None:
             if text_only
             else elevenlabs.STT(
                 model=os.getenv("ELEVENLABS_STT_MODEL", "scribe_v2_realtime"),
+                language_code="en",
                 server_vad={"vad_silence_threshold_secs": 1.0},
             )
         ),
@@ -342,6 +375,29 @@ async def entrypoint(ctx: JobContext) -> None:
         vad=None if text_only else silero.VAD.load(),
         turn_handling=turn_handling,
     )
+
+    ending = False
+    end_lock = asyncio.Lock()
+
+    @session.on("speech_created")
+    def watch_for_completion(event) -> None:
+        async def finish_when_spoken() -> None:
+            nonlocal ending
+            async with end_lock:
+                if ending:
+                    return
+                if await end_call_after_playout(
+                    event.speech_handle,
+                    store,
+                    onboarding_id,
+                    connection_id,
+                    executor_id,
+                    ctx,
+                    agent.observation_tasks,
+                ):
+                    ending = True
+
+        asyncio.create_task(finish_when_spoken())
 
     # Persist assistant messages emitted by the LiveKit session.
     @session.on("conversation_item_added")

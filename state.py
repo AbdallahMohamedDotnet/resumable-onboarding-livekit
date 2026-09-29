@@ -21,6 +21,22 @@ STATUSES = {"missing", "answered", "unknown", "declined", "needs_clarification"}
 COMPLETE = {"answered", "unknown", "declined"}
 
 
+class StateError(RuntimeError):
+    pass
+
+
+class Conflict(ValueError):
+    pass
+
+
+class Unauthorized(PermissionError):
+    pass
+
+
+class UnsupportedWorkflow(ValueError):
+    pass
+
+
 # Build a workflow field definition with its completion rules.
 def _field(
     field_id: str, question: str, kind: str = "text", required: bool = True
