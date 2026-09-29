@@ -303,7 +303,6 @@ async def entrypoint(ctx: JobContext) -> None:
 
     ctx.add_shutdown_callback(stop_lease)
     if not ctx.is_fake_job():
-        await ctx.connect()
         await ctx.wait_for_participant(identity=participant)
     agent = OnboardingAgent(store, onboarding_id, connection_id, executor_id)
     text_only = ctx.is_fake_job() and os.getenv("ONBOARDING_TEXT_ONLY") == "1"
