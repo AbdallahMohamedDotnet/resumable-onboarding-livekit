@@ -118,22 +118,6 @@ MIGRATIONS = [
 ]
 
 
-class StateError(Exception):
-    pass
-
-
-class Conflict(StateError):
-    pass
-
-
-class Unauthorized(StateError):
-    pass
-
-
-class UnsupportedWorkflow(StateError):
-    pass
-
-
 def now() -> str:
     return datetime.now(UTC).isoformat()
 

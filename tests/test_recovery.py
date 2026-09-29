@@ -214,7 +214,6 @@ def test_real_job_sigkill_and_takeover(tmp_path, monkeypatch):
     from livekit import api
 
     from cli import dispatch as reconcile_dispatch
-    from state import Unauthorized
 
     root = Path(__file__).resolve().parents[1]
     config = dotenv_values(root / ".env.local")
@@ -303,7 +302,7 @@ def test_real_job_sigkill_and_takeover(tmp_path, monkeypatch):
                 break
             assert time.monotonic() < deadline, log_path.read_text()[-1500:]
             time.sleep(0.1)
-        with pytest.raises(Unauthorized):
+        with pytest.raises(PermissionError):
             store.capture(
                 onboarding_id,
                 first_connection,
@@ -329,7 +328,7 @@ def test_real_job_sigkill_and_takeover(tmp_path, monkeypatch):
                 break
             assert time.monotonic() < deadline, log_path.read_text()[-1500:]
             time.sleep(0.1)
-        with pytest.raises(Unauthorized):
+        with pytest.raises(PermissionError):
             store.capture(
                 onboarding_id,
                 first_connection,

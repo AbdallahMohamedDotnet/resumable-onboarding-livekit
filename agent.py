@@ -26,7 +26,7 @@ from livekit.agents import (
 )
 from livekit.plugins import elevenlabs, openai, silero
 
-from state import StateError, Store
+from state import Store
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env.local"))
 server = AgentServer()
@@ -137,7 +137,7 @@ class OnboardingAgent(Agent):
                 None,
             )
             if input_event is None:
-                raise StateError("Input persistence barrier was not reached")
+                raise RuntimeError("Input persistence barrier was not reached")
         context = json.loads(input_event["context_json"])
         complete = False
         for kind in ("answers", "booking", "proposal"):
@@ -187,7 +187,7 @@ class OnboardingAgent(Agent):
         async def confirm_followup(run_context: RunContext, approved: bool) -> str:
             action = context["action"]
             if action["kind"] != "approval":
-                raise StateError("No proposal was presented for this turn")
+                raise RuntimeError("No proposal was presented for this turn")
             result = await asyncio.to_thread(
                 self.store.confirm,
                 self.onboarding_id,
@@ -271,7 +271,7 @@ async def entrypoint(ctx: JobContext) -> None:
             if row["id"] == connection_id
         )
         if connection["room"] != ctx.room.name:
-            raise StateError("Dispatch room does not match authorized connection")
+            raise RuntimeError("Dispatch room does not match authorized connection")
         participant = connection["participant"]
     executor_id = uuid.uuid4().hex
     await asyncio.to_thread(
@@ -288,7 +288,7 @@ async def entrypoint(ctx: JobContext) -> None:
             await asyncio.sleep(20)
             try:
                 await asyncio.to_thread(store.claim, connection_id, executor_id)
-            except StateError:
+            except PermissionError:
                 ctx.shutdown("Connection ownership ended")
                 return
 
@@ -389,7 +389,7 @@ async def entrypoint(ctx: JobContext) -> None:
                     store.operation, onboarding_id, item["source_id"], "proposal"
                 )
             ):
-                raise StateError("Pending input was not committed during recovery")
+                raise RuntimeError("Pending input was not committed during recovery")
     if not pending:
         action = await asyncio.to_thread(store.next_action, onboarding_id)
         await session.say(action["text"])

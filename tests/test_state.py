@@ -3,7 +3,7 @@ from stat import S_IMODE
 
 import pytest
 
-from state import Conflict, StateError, Store, Unauthorized, UnsupportedWorkflow
+from state import Store
 
 
 @pytest.fixture
@@ -72,7 +72,7 @@ def test_multi_field_idempotency_and_correction(active):
         )
         == first
     )
-    with pytest.raises(Conflict):
+    with pytest.raises(ValueError):
         store.apply_answers(
             onboarding_id,
             connection_id,
@@ -112,7 +112,7 @@ def test_takeover_fences_old_executor(active):
     )
     assert generation == 2
     store.claim(new_connection, "new-executor")
-    with pytest.raises(Unauthorized):
+    with pytest.raises(PermissionError):
         store.capture(onboarding_id, old_connection, "executor", "late", "late", {})
     assert store.integrity() == "ok"
 
@@ -124,7 +124,7 @@ def test_dead_job_can_reclaim_same_connection(active):
             "UPDATE connections SET job_pid=? WHERE id=?", (2**30, connection_id)
         )
     store.claim(connection_id, "replacement", job_id="new-job", job_pid=2**30 + 1)
-    with pytest.raises(Unauthorized):
+    with pytest.raises(PermissionError):
         store.capture(onboarding_id, connection_id, "executor", "old", "old", {})
 
 
@@ -163,7 +163,7 @@ def test_workflow_version_and_unsupported(active):
         db.execute(
             "UPDATE onboardings SET workflow_version=99 WHERE id=?", (onboarding_id,)
         )
-    with pytest.raises(UnsupportedWorkflow):
+    with pytest.raises(ValueError):
         store.get(onboarding_id)
     assert store.integrity() == "ok"
 
@@ -233,7 +233,7 @@ def test_competing_booking_and_reschedule_preserves_old_on_failure(tmp_path):
     first = prepared_proposal(store, first_id, first_connection, "one", "p1", start)
     second = prepared_proposal(store, second_id, second_connection, "two", "p2", start)
     approval(store, first_id, first_connection, "one", "a1", first)
-    with pytest.raises(Conflict):
+    with pytest.raises(ValueError):
         approval(store, second_id, second_connection, "two", "a2", second)
     assert store.rows("followups", second_id)[0]["status"] == "proposed"
     assert store.rows("followups", first_id)[0]["status"] == "booked"
@@ -245,7 +245,7 @@ def test_competing_booking_and_reschedule_preserves_old_on_failure(tmp_path):
     replacement = prepared_proposal(
         store, first_id, first_connection, "one", "p4", later
     )
-    with pytest.raises(Conflict):
+    with pytest.raises(ValueError):
         approval(store, first_id, first_connection, "one", "a4", replacement)
     assert (
         next(
@@ -289,7 +289,7 @@ def test_isolation_and_invalid_values(active):
     store, first_id, _, _ = active
     second_id, _ = store.create()
     capture(active, "invalid")
-    with pytest.raises(StateError):
+    with pytest.raises(RuntimeError):
         apply(active, "invalid", {"company.employee_count": {"value": False}})
     assert store.get(first_id)["revision"] == 0
     assert store.get(second_id)["revision"] == 0
@@ -317,7 +317,7 @@ def test_booking_requires_observed_exact_proposal(active):
             }
         },
     )
-    with pytest.raises(Conflict, match="not observed"):
+    with pytest.raises(ValueError, match="not observed"):
         store.confirm(
             onboarding_id,
             connection_id,
@@ -329,7 +329,7 @@ def test_booking_requires_observed_exact_proposal(active):
         )
     assert store.rows("followups", onboarding_id)[0]["status"] == "proposed"
     store.observe_assistant(onboarding_id, connection_id, "too-late", text, False)
-    with pytest.raises(Conflict, match="not observed"):
+    with pytest.raises(ValueError, match="not observed"):
         store.confirm(
             onboarding_id,
             connection_id,

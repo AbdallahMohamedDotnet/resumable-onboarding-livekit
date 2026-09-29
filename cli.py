@@ -23,7 +23,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from state import StateError, Store
+from state import Store
 
 load_dotenv(Path(__file__).resolve().parent / ".env.local")
 console = Console(stderr=False)
@@ -305,7 +305,7 @@ def main() -> int:
             raise AssertionError(command)
         show(value, args.json)
         return 0
-    except (StateError, KeyError, ValueError, OSError, ClientError, ServerError) as exc:
+    except (RuntimeError, KeyError, ValueError, OSError, ClientError, ServerError) as exc:
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
