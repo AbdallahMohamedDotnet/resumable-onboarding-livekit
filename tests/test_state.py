@@ -370,7 +370,7 @@ def test_declined_followup_finishes_without_timezone(active):
     }
     answers["followup.availability"] = {"status": "declined"}
     apply(active, "decline", answers)
-    assert store.next_action(onboarding_id)["id"] == "followup.declined"
+    assert store.next_action(onboarding_id)["kind"] == "review_offer"
     assert store.summary(onboarding_id)["partial"] is False
 
 
@@ -403,3 +403,79 @@ def test_zero_value_and_busy_write_preserve_pending_input(active):
     assert [item["source_id"] for item in store.pending_inputs(onboarding_id)] == [
         "busy"
     ]
+
+
+# Verify review choices and corrections survive a new Store instance.
+def test_review_walks_answers_and_applies_correction(active):
+    store, onboarding_id, _, connection_id = active
+    capture(active, "initial", "I am Ahmed and do not want a follow-up")
+    answers = {
+        field["id"]: {"value": field["id"]}
+        for field in store.get(onboarding_id)["workflow"]
+        if field["required"]
+        and field["id"] not in {"followup.availability", "followup.customer_timezone"}
+    }
+    answers["followup.availability"] = {"status": "declined"}
+    apply(active, "initial", answers)
+    assert store.next_action(onboarding_id)["kind"] == "review_offer"
+
+    def decide(source, utterance, decision):
+        action = store.next_action(onboarding_id)
+        store.capture(
+            onboarding_id,
+            connection_id,
+            "executor",
+            source,
+            utterance,
+            {"action": action},
+        )
+        return store.review_decision(
+            onboarding_id, connection_id, "executor", source, decision
+        )
+
+    started = decide("start-review", "Yes, please", "start")
+    assert (
+        store.review_decision(
+            onboarding_id, connection_id, "executor", "start-review", "start"
+        )
+        == started
+    )
+    reopened = Store(store.path)
+    assert reopened.next_action(onboarding_id)["id"] == "customer.name"
+    decide("reject-name", "That is wrong", "change")
+    assert reopened.next_action(onboarding_id)["kind"] == "review_correction"
+    action = reopened.next_action(onboarding_id)
+    store.capture(
+        onboarding_id,
+        connection_id,
+        "executor",
+        "unclear-fix",
+        "I need to think",
+        {"action": action},
+    )
+    apply(active, "unclear-fix", {})
+    assert reopened.next_action(onboarding_id)["kind"] == "review_correction"
+    store.capture(
+        onboarding_id,
+        connection_id,
+        "executor",
+        "fix-name",
+        "My name is Sara",
+        {"action": action},
+    )
+    result = store.apply_answers(
+        onboarding_id,
+        connection_id,
+        "executor",
+        "fix-name",
+        {"customer.name": {"value": "Sara"}},
+        store.get(onboarding_id)["revision"],
+        ["customer.name"],
+    )
+    assert result["changes"]["customer.name"]["new"]["value"] == "Sara"
+    assert reopened.next_action(onboarding_id)["id"] == "customer.contact"
+    assert reopened.pending_inputs(onboarding_id) == []
+    for index in range(len(answers) - 1):
+        decide(f"accept-{index}", "That is correct", "accept")
+    assert reopened.next_action(onboarding_id)["kind"] == "complete"
+    assert reopened.get(onboarding_id)["state"]["customer.name"]["value"] == "Sara"

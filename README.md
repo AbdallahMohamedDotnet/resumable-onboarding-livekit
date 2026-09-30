@@ -31,7 +31,7 @@ Run these commands from `resumable-onboarding` after setup. Each new session pri
 ./scripts/start-session.sh --voice --resume run/taker-ONBOARDING_ID.json
 ```
 
-Speak as the customer and listen to the agent's replies. Voice mode needs `OPENROUTER_API_KEY`, a tool-capable `OPENROUTER_MODEL`, `ELEVEN_API_KEY`, and `ELEVENLABS_VOICE_ID` in `.env.local`. It uses ElevenLabs STT/TTS and Silero voice activity detection. OpenRouter and ElevenLabs calls can incur charges. If the wrong microphone or speaker is selected, list devices and pass an index or name substring:
+Speak as the customer and listen to the agent's replies. Once onboarding and any follow-up booking are finished, the agent asks whether to review the saved information. Say yes to hear each saved answer and confirm or reject it. If an answer is wrong, describe the topic and replacement; the correction is saved before the next answer is read. You can decline the review, and a disconnected review resumes at the same question. Voice mode needs `OPENROUTER_API_KEY`, a tool-capable `OPENROUTER_MODEL`, `ELEVEN_API_KEY`, and `ELEVENLABS_VOICE_ID` in `.env.local`. It uses ElevenLabs STT/TTS and Silero voice activity detection. OpenRouter and ElevenLabs calls can incur charges. If the wrong microphone or speaker is selected, list devices and pass an index or name substring:
 
 ```bash
 ./scripts/start-session.sh --list-devices
@@ -75,7 +75,7 @@ uv run python cli.py reconcile
 
 `new` prints an opaque resume credential once, plus a 15-minute room-scoped client token. Store the credential securely. `resume` asks for it without a shell argument, validates its hash, creates a fresh room and participant, advances a database generation, and issues a new token. The newest authorized device wins. The operator-only rotation command recovers from interrupted credential delivery. Names or contact details do not authorize a resume.
 
-`state`, `transcript`, `operations`, `followups`, `summary`, and `export` are separate views. Add `--json` before the subcommand for plain JSON output. `transcript --follow` tails observed events. The summary is deterministic from canonical state and the actual booking, with its source revision and unresolved fields. Historical summaries remain in SQLite. Corrections preserve earlier transcript turns and record old/new values in an operation result. An availability correction invalidates a pending proposal; after a booking it marks rescheduling required and retains the old booking until a replacement is approved.
+`state`, `transcript`, `operations`, `followups`, `summary`, and `export` are separate views. Add `--json` before the subcommand for plain JSON output. `transcript --follow` tails observed events. The summary is deterministic from canonical state and the actual booking, with its source revision and unresolved fields. Historical summaries remain in SQLite. Corrections preserve earlier transcript turns and record old/new values in an operation result. Review decisions and the current review position are also saved in SQLite. An availability correction invalidates a pending proposal; after a booking it marks rescheduling required and retains the old booking until a replacement is approved.
 
 The local console does not prove browser or device reconnection. For real rooms, use the token from `new` or `resume` in an existing compatible LiveKit client.
 

@@ -33,7 +33,8 @@ async def test_text_input_is_durable_before_llm_request(tmp_path, monkeypatch):
     monkeypatch.setattr(Agent.default, "llm_node", observe_provider_call)
     tools = []
     assert [
-        chunk async for chunk in agent.llm_node(ChatContext(items=[message]), tools, None)
+        chunk
+        async for chunk in agent.llm_node(ChatContext(items=[message]), tools, None)
     ] == []
     assert [tool.id for tool in tools] == ["save_answers"]
     assert len(store.pending_inputs(onboarding_id)) == 1
@@ -82,7 +83,9 @@ async def test_call_ends_only_after_completed_reply(tmp_path):
     store = Store(tmp_path / "agent.sqlite3")
     store.migrate()
     onboarding_id, credential = store.create()
-    connection_id, _ = store.connect_attempt(onboarding_id, credential, "room", "person")
+    connection_id, _ = store.connect_attempt(
+        onboarding_id, credential, "room", "person"
+    )
     store.claim(connection_id, "executor")
 
     class Speech:
@@ -125,6 +128,18 @@ async def test_call_ends_only_after_completed_reply(tmp_path):
     )
     store.apply_answers(
         onboarding_id, connection_id, "executor", "final-turn", answers, 0
+    )
+    assert store.next_action(onboarding_id)["kind"] == "review_offer"
+    store.capture(
+        onboarding_id,
+        connection_id,
+        "executor",
+        "skip-review",
+        "No, thanks",
+        {"action": store.next_action(onboarding_id)},
+    )
+    store.review_decision(
+        onboarding_id, connection_id, "executor", "skip-review", "skip"
     )
     assert store.next_action(onboarding_id)["kind"] == "complete"
     closing_speech = Speech()

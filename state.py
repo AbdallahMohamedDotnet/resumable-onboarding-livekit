@@ -133,6 +133,15 @@ MIGRATIONS = [
     );
     """,
     "ALTER TABLE connections ADD COLUMN job_pid INTEGER;",
+    """
+    CREATE TABLE reviews (
+      onboarding_id TEXT PRIMARY KEY REFERENCES onboardings(id),
+      phase TEXT NOT NULL DEFAULT 'offer', field_id TEXT,
+      updated_at TEXT NOT NULL
+    );
+    INSERT INTO reviews(onboarding_id,phase,updated_at)
+      SELECT id,'offer',updated_at FROM onboardings;
+    """,
 ]
 
 
@@ -238,6 +247,10 @@ class Store:
                     now(),
                 ),
             )
+            db.execute(
+                "INSERT INTO reviews(onboarding_id,phase,updated_at) VALUES(?,'offer',?)",
+                (onboarding_id, now()),
+            )
         return onboarding_id, credential
 
     # Check whether a resume credential matches this onboarding.
@@ -306,11 +319,14 @@ class Store:
                 "text": f"May I replace your existing booking with {proposal['start_utc']} UTC?",
             }
         if booking and row["status"] != "reschedule_required":
-            return {
-                "kind": "complete",
-                "id": "followup.booked",
-                "text": "Your follow-up is booked.",
-            }
+            return self._review_action(
+                row,
+                {
+                    "kind": "complete",
+                    "id": "followup.booked",
+                    "text": "Your follow-up is booked.",
+                },
+            )
         if proposal:
             return {
                 "kind": "approval",
@@ -319,16 +335,154 @@ class Store:
                 "text": f"May I book your follow-up for {proposal['start_utc']} UTC?",
             }
         if declined and not booking:
-            return {
-                "kind": "complete",
-                "id": "followup.declined",
-                "text": "No follow-up was booked.",
-            }
+            return self._review_action(
+                row,
+                {
+                    "kind": "complete",
+                    "id": "followup.declined",
+                    "text": "No follow-up was booked.",
+                },
+            )
         return {
             "kind": "proposal",
             "id": "followup.proposal",
             "text": "What exact date and time would you like for the follow-up?",
         }
+
+    # Present saved answers in workflow order after the normal onboarding ends.
+    def _review_action(self, row: dict, ending: dict) -> dict:
+        with self.connect() as db:
+            review = db.execute(
+                "SELECT phase,field_id FROM reviews WHERE onboarding_id=?", (row["id"],)
+            ).fetchone()
+        if review is None or review["phase"] == "done":
+            return ending
+        if review["phase"] == "offer":
+            return {
+                "kind": "review_offer",
+                "text": "The conversation is over now. Can I review the information you provided?",
+            }
+        field_id = review["field_id"]
+        if review["phase"] == "correction":
+            return {
+                "kind": "review_correction",
+                "id": field_id,
+                "text": "Which topic is wrong, and what should I change it to?",
+            }
+        field = next(f for f in row["workflow"] if f["id"] == field_id)
+        answer = row["state"][field_id]
+        value = (
+            str(answer["value"])
+            if answer["status"] == "answered"
+            else answer["status"].replace("_", " ")
+        )
+        return {
+            "kind": "review_item",
+            "id": field_id,
+            "text": f"Your answer to '{field['question']}' is: {value}. Is that correct, or would you like to change it?",
+        }
+
+    def _next_review_field(self, row: sqlite3.Row, field_id: str | None) -> str | None:
+        seen = field_id is None
+        state = json.loads(row["state_json"])
+        for field in json.loads(row["workflow_snapshot"]):
+            if not seen:
+                seen = field["id"] == field_id
+                continue
+            if state[field["id"]]["status"] != "missing":
+                return field["id"]
+        return None
+
+    # Advance the review invitation or a single confirmed answer atomically.
+    def review_decision(
+        self,
+        onboarding_id: str,
+        connection_id: str,
+        executor_id: str,
+        source_id: str,
+        decision: str,
+    ) -> dict:
+        if decision not in {"start", "skip", "accept", "change"}:
+            raise StateError("Invalid review decision")
+        key = f"{onboarding_id}:{source_id}:review"
+        payload = {"decision": decision}
+        with self.write() as db:
+            self._check_owner(db, onboarding_id, connection_id, executor_id)
+            turn = db.execute(
+                "SELECT context_json FROM transcript_events WHERE onboarding_id=? AND source_id=? AND kind='final_turn'",
+                (onboarding_id, source_id),
+            ).fetchone()
+            if turn is None:
+                raise StateError("Input must be durable before interpretation")
+            existing = db.execute(
+                "SELECT * FROM operations WHERE key=?", (key,)
+            ).fetchone()
+            if existing:
+                if existing["payload_json"] != _json(payload):
+                    raise Conflict("Operation key reused with different payload")
+                return json.loads(existing["result_json"])
+            action = json.loads(turn["context_json"])["action"]
+            review = db.execute(
+                "SELECT phase,field_id FROM reviews WHERE onboarding_id=?",
+                (onboarding_id,),
+            ).fetchone()
+            row = db.execute(
+                "SELECT * FROM onboardings WHERE id=?", (onboarding_id,)
+            ).fetchone()
+            if action["kind"] == "review_offer" and review["phase"] == "offer":
+                if decision not in {"start", "skip"}:
+                    raise Conflict("Expected a review invitation decision")
+                next_field = (
+                    self._next_review_field(row, None) if decision == "start" else None
+                )
+                phase = "item" if next_field else "done"
+            elif (
+                action["kind"] in {"review_item", "review_correction"}
+                and review["phase"]
+                == ("item" if action["kind"] == "review_item" else "correction")
+                and action["id"] == review["field_id"]
+            ):
+                allowed = (
+                    {"accept", "change"}
+                    if action["kind"] == "review_item"
+                    else {"accept"}
+                )
+                if decision not in allowed:
+                    raise Conflict("Expected an answer review decision")
+                next_field = (
+                    self._next_review_field(row, review["field_id"])
+                    if decision == "accept"
+                    else review["field_id"]
+                )
+                phase = (
+                    "correction"
+                    if decision == "change"
+                    else "item"
+                    if next_field
+                    else "done"
+                )
+            else:
+                raise Conflict("Review position changed")
+            db.execute(
+                "UPDATE reviews SET phase=?,field_id=?,updated_at=? WHERE onboarding_id=?",
+                (phase, next_field, now(), onboarding_id),
+            )
+            result = {"phase": phase, "field_id": next_field}
+            db.execute(
+                "INSERT INTO operations(key,onboarding_id,source_id,kind,payload_json,status,result_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                (
+                    key,
+                    onboarding_id,
+                    source_id,
+                    "review",
+                    _json(payload),
+                    "committed",
+                    _json(result),
+                    now(),
+                    now(),
+                ),
+            )
+            return result
 
     # Authorize a connection attempt and advance its generation.
     def connect_attempt(
@@ -512,11 +666,13 @@ class Store:
         key = f"{onboarding_id}:{source_id}:answers"
         with self.write() as db:
             self._check_owner(db, onboarding_id, connection_id, executor_id)
-            if not db.execute(
-                "SELECT 1 FROM transcript_events WHERE onboarding_id=? AND source_id=? AND kind='final_turn'",
+            turn = db.execute(
+                "SELECT context_json FROM transcript_events WHERE onboarding_id=? AND source_id=? AND kind='final_turn'",
                 (onboarding_id, source_id),
-            ).fetchone():
+            ).fetchone()
+            if turn is None:
                 raise StateError("Input must be durable before interpretation")
+            action = json.loads(turn["context_json"]).get("action", {})
             existing = db.execute(
                 "SELECT * FROM operations WHERE key=?", (key,)
             ).fetchone()
@@ -577,6 +733,29 @@ class Store:
                         "UPDATE onboardings SET status=? WHERE id=?",
                         ("reschedule_required" if booked else "active", onboarding_id),
                     )
+            if action.get("kind") == "review_correction" and answers:
+                review = db.execute(
+                    "SELECT phase,field_id FROM reviews WHERE onboarding_id=?",
+                    (onboarding_id,),
+                ).fetchone()
+                if (
+                    review["phase"] != "correction"
+                    or review["field_id"] != action["id"]
+                ):
+                    raise Conflict("Review position changed")
+                current_row = db.execute(
+                    "SELECT * FROM onboardings WHERE id=?", (onboarding_id,)
+                ).fetchone()
+                next_field = self._next_review_field(current_row, review["field_id"])
+                db.execute(
+                    "UPDATE reviews SET phase=?,field_id=?,updated_at=? WHERE onboarding_id=?",
+                    (
+                        "item" if next_field else "done",
+                        next_field,
+                        now(),
+                        onboarding_id,
+                    ),
+                )
             result = {"revision": revision, "changes": changes}
             db.execute(
                 "INSERT INTO operations(key,onboarding_id,source_id,kind,payload_json,status,result_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",

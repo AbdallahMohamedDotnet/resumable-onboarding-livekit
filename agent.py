@@ -144,7 +144,7 @@ class OnboardingAgent(Agent):
                 raise RuntimeError("Input persistence barrier was not reached")
         context = json.loads(input_event["context_json"])
         complete = False
-        for kind in ("answers", "booking", "proposal"):
+        for kind in ("answers", "booking", "proposal", "review"):
             if await asyncio.to_thread(
                 self.store.operation, self.onboarding_id, source_id, kind
             ):
@@ -233,10 +233,33 @@ class OnboardingAgent(Agent):
             )
             return json.dumps(result)
 
+        @function_tool(
+            name="review_decision",
+            description=(
+                "Record the customer's review choice. At review_offer use start "
+                "for yes or skip for no. At review_item use accept for correct/fine "
+                "or change for incorrect/bad/not good. At review_correction use "
+                "accept only if the customer decides no change is needed."
+            ),
+        )
+        async def review_decision(run_context: RunContext, decision: str) -> str:
+            result = await asyncio.to_thread(
+                self.store.review_decision,
+                self.onboarding_id,
+                self.connection_id,
+                self.executor_id,
+                source_id,
+                decision,
+            )
+            return json.dumps(result)
+
         # FIX: at the "proposal" step, allow save_answers so the customer can decline.
         selected = {
             "approval": [confirm_followup],
             "proposal": [propose_followup, save_answers],
+            "review_offer": [review_decision],
+            "review_item": [review_decision],
+            "review_correction": [save_answers, review_decision],
         }.get(context["action"]["kind"], [save_answers])
         tools[:] = selected
         current = await asyncio.to_thread(self.store.get, self.onboarding_id)
@@ -250,13 +273,22 @@ class OnboardingAgent(Agent):
                     "canonical_state": current["state"],
                     # FIX: spell out how to decline / skip so the LLM uses the right shape.
                     "rule": (
-                        "Interpret the last user turn only. Resolve relative dates from "
+                        "Interpret the last user turn only. For review_offer, call "
+                        "review_decision(start/skip). For review_item, call "
+                        "review_decision(accept/change); words like bad, wrong, or "
+                        "not good mean change. For review_correction, extract the "
+                        "topic and replacement from this turn, call save_answers "
+                        "with only explicitly changed fields and their correction_ids. "
+                        "If the customer decides to keep the answer, call "
+                        "review_decision(accept). If the replacement is unclear, "
+                        "call save_answers with an empty object to ask again. "
+                        "Resolve relative dates from "
                         "original_turn_context.captured_at and its timezone, even during "
                         "replay. Call the provided business tool exactly once. Do not "
                         "invent facts or claim a booking. If the customer declines a "
                         "field, call save_answers with that field set to "
-                        "{\"status\": \"declined\", \"value\": null}. If they say they "
-                        "do not know or to skip, use {\"status\": \"unknown\", "
+                        '{"status": "declined", "value": null}. If they say they '
+                        'do not know or to skip, use {"status": "unknown", '
                         "\"value\": null}. Never put text in 'value' for any non-"
                         "'answered' status."
                     ),
@@ -473,6 +505,9 @@ async def entrypoint(ctx: JobContext) -> None:
                 )
                 and not await asyncio.to_thread(
                     store.operation, onboarding_id, item["source_id"], "proposal"
+                )
+                and not await asyncio.to_thread(
+                    store.operation, onboarding_id, item["source_id"], "review"
                 )
             ):
                 raise RuntimeError("Pending input was not committed during recovery")
