@@ -52,41 +52,32 @@ def _field(
 
 WORKFLOWS = {
     1: [
-        _field("customer.name", "What is your name?", required=True),
+        _field("customer.name", "What is your name?"),
         _field(
-            "customer.contact",
-            "What is the best email or phone number to reach you?",
-            required=False,
+            "customer.contact", "What is the best email or phone number to reach you?"
         ),
         _field("customer.role", "What is your role?", required=False),
-        _field("company.name", "What is your company called?", required=False),
-        _field("company.description", "What does your company do?", required=False),
+        _field("company.name", "What is your company called?"),
+        _field("company.description", "What does your company do?"),
         _field("company.industry", "What industry are you in?", required=False),
         _field(
             "company.employee_count",
             "How many employees do you have?",
             "nonnegative_int",
-            required=False,
+            False,
         ),
+        _field("problem.description", "What problem would you like to solve?"),
         _field(
-            "problem.description", "What problem would you like to solve?", required=False
+            "problem.business_impact", "How is this problem affecting your business?"
         ),
-        _field(
-            "problem.business_impact",
-            "How is this problem affecting your business?",
-            required=False,
-        ),
-        _field("problem.desired_outcome", "What outcome would you like?", required=False),
-        _field("urgency.timeframe", "How soon do you need this solved?", required=False),
+        _field("problem.desired_outcome", "What outcome would you like?"),
+        _field("urgency.timeframe", "How soon do you need this solved?"),
         _field("urgency.deadline", "Is there a specific deadline?", required=False),
-        _field(
-            "followup.availability",
-            "When are you available for a follow-up?",
-            required=False,
-        ),
-        _field("followup.customer_timezone", "What time zone are you in?", required=False),
+        _field("followup.availability", "When are you available for a follow-up?"),
+        _field("followup.customer_timezone", "What time zone are you in?"),
     ],
 }
+
 WORKFLOWS[2] = [
     *WORKFLOWS[1],
     _field("company.budget", "What budget range do you have?", required=False),

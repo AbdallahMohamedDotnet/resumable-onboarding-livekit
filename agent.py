@@ -165,7 +165,14 @@ class OnboardingAgent(Agent):
         # Save facts and explicit corrections extracted from this turn.
         @function_tool(
             name="save_answers",
-            description="Save all facts from this turn. answers_json maps field IDs to objects with value and optional status. correction_ids identifies explicit corrections.",
+            description=(
+                "Save all facts from this turn. answers_json maps field IDs to objects "
+                "with keys 'value' and optional 'status'. Valid statuses are 'answered' "
+                "(default, requires a non-null value), 'declined' (customer refused; "
+                "value must be null), 'unknown' (customer does not know; value must be "
+                "null), and 'needs_clarification' (value must be null). "
+                "correction_ids identifies explicit corrections."
+            ),
         )
         async def save_answers(
             run_context: RunContext, answers_json: str, correction_ids: list[str]
@@ -226,9 +233,10 @@ class OnboardingAgent(Agent):
             )
             return json.dumps(result)
 
+        # FIX: at the "proposal" step, allow save_answers so the customer can decline.
         selected = {
             "approval": [confirm_followup],
-            "proposal": [propose_followup],
+            "proposal": [propose_followup, save_answers],
         }.get(context["action"]["kind"], [save_answers])
         tools[:] = selected
         current = await asyncio.to_thread(self.store.get, self.onboarding_id)
@@ -240,7 +248,18 @@ class OnboardingAgent(Agent):
                     "original_turn_context": context,
                     "workflow_fields": current["workflow"],
                     "canonical_state": current["state"],
-                    "rule": "Interpret the last user turn only. Resolve relative dates from original_turn_context.captured_at and its timezone, even during replay. Call the provided business tool exactly once. Do not invent facts or claim a booking.",
+                    # FIX: spell out how to decline / skip so the LLM uses the right shape.
+                    "rule": (
+                        "Interpret the last user turn only. Resolve relative dates from "
+                        "original_turn_context.captured_at and its timezone, even during "
+                        "replay. Call the provided business tool exactly once. Do not "
+                        "invent facts or claim a booking. If the customer declines a "
+                        "field, call save_answers with that field set to "
+                        "{\"status\": \"declined\", \"value\": null}. If they say they "
+                        "do not know or to skip, use {\"status\": \"unknown\", "
+                        "\"value\": null}. Never put text in 'value' for any non-"
+                        "'answered' status."
+                    ),
                 }
             ),
         )

@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -23,6 +24,58 @@ def audio_devices_available(output: str) -> bool:
     return any(device in {"Input", "Both"} for device in devices) and any(
         device in {"Output", "Both"} for device in devices
     )
+
+
+# Run the interactive console and exit once the onboarding has completed.
+def run_console_until_complete(
+    command: list[str],
+    cwd: Path,
+    env: dict,
+    store: Store,
+    onboarding_id: str,
+) -> int:
+    proc = subprocess.Popen(command, cwd=cwd, env=env)
+    try:
+        while proc.poll() is None:
+            time.sleep(1.0)
+            try:
+                action = store.next_action(onboarding_id)
+            except Exception:
+                continue
+            if action.get("kind") != "complete":
+                continue
+            # The state machine says we're done. Confirm the closing line was
+            # actually emitted by the agent before tearing the console down.
+            try:
+                events = store.rows("transcript_events", onboarding_id)
+            except Exception:
+                continue
+            closing_text = action.get("text")
+            if not any(
+                e.get("role") == "assistant"
+                and e.get("kind") == "observed"
+                and e.get("text") == closing_text
+                for e in events
+            ):
+                continue
+            # Let the closing line finish playing, then stop the console.
+            time.sleep(3.0)
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            return proc.returncode or 0
+        return proc.returncode or 0
+    except KeyboardInterrupt:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        return 130
 
 
 # Start or resume a local text or voice onboarding console session.
@@ -65,7 +118,7 @@ def main() -> int:
         onboarding_id, credential = store.create()
         session = {"onboarding_id": onboarding_id, "resume_credential": credential}
         run_dir = ROOT / "run"
-        run_dir.mkdir(mode=0o700, exist_ok=True)
+        run_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         session_file = run_dir / f"taker-{onboarding_id}.json"
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         descriptor = os.open(session_file, flags, 0o600)
@@ -97,8 +150,8 @@ def main() -> int:
         if args.output_device:
             command.extend(["--output-device", args.output_device])
         command.append("agent.py")
-        return subprocess.call(
-            command, cwd=ROOT, env=env
+        return run_console_until_complete(
+            command, ROOT, env, store, session["onboarding_id"]
         )
     except KeyboardInterrupt:
         return 130
