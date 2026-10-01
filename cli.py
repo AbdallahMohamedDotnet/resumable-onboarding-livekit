@@ -65,7 +65,11 @@ def token(room: str, participant: str) -> str:
         .with_identity(participant)
         .with_grants(
             api.VideoGrants(
-                room_join=True, room=room, can_publish=True, can_subscribe=True
+                room_join=True,
+                room=room,
+                can_publish=True,
+                can_subscribe=True,
+                can_update_own_metadata=True,
             )
         )
         .with_ttl(timedelta(minutes=15))

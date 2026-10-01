@@ -647,6 +647,48 @@ class Store:
             raise StateError("Non-answer statuses require null value")
         return {"status": status, "value": value}
 
+    # Accept a client-reported timezone only while the customer has not answered.
+    def set_detected_timezone(
+        self,
+        onboarding_id: str,
+        connection_id: str,
+        executor_id: str,
+        timezone: str,
+    ) -> bool:
+        try:
+            ZoneInfo(timezone)
+        except (KeyError, TypeError, ValueError):
+            return False
+        with self.write() as db:
+            self._check_owner(db, onboarding_id, connection_id, executor_id)
+            row = db.execute(
+                "SELECT state_json FROM onboardings WHERE id=?", (onboarding_id,)
+            ).fetchone()
+            state = json.loads(row["state_json"])
+            field = state.get("followup.customer_timezone")
+            if field is None or field["status"] != "missing":
+                return False
+            # Do not change the revision beneath an already captured customer turn.
+            pending = db.execute(
+                "SELECT 1 FROM transcript_events t WHERE t.onboarding_id=? AND t.kind='final_turn' AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.onboarding_id=t.onboarding_id AND o.source_id=t.source_id AND o.status='committed') LIMIT 1",
+                (onboarding_id,),
+            ).fetchone()
+            if pending:
+                return False
+            state["followup.customer_timezone"] = {
+                "status": "answered",
+                "value": timezone,
+            }
+            db.execute(
+                "UPDATE onboardings SET state_json=?,revision=revision+1,updated_at=? WHERE id=?",
+                (_json(state), now(), onboarding_id),
+            )
+            db.execute(
+                "UPDATE summaries SET status='historical' WHERE onboarding_id=? AND status='current'",
+                (onboarding_id,),
+            )
+            return True
+
     # Apply extracted answers and corrections as one durable operation.
     def apply_answers(
         self,

@@ -79,6 +79,17 @@ uv run python cli.py reconcile
 
 The local console does not prove browser or device reconnection. For real rooms, use the token from `new` or `resume` in an existing compatible LiveKit client.
 
+For browser clients, report the browser's IANA time zone through a LiveKit participant attribute after joining the room:
+
+```js
+const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+if (timezone) {
+  await room.localParticipant.setAttributes({ "customer.timezone": timezone });
+}
+```
+
+The agent reads this attribute when the customer joins and if it changes later. A valid zone is saved before the time zone question, so the question is skipped. If the client does not send one, or sends an invalid zone, the agent asks the customer as before. A saved answer is never replaced by a later device's zone. LiveKit transports participant attributes; it does not determine the customer's time zone itself. The local console has no browser attribute and still asks.
+
 ## Durability and recovery
 
 A finalized turn is written and committed before the LLM can interpret it. A stable source ID links the transcript to its business operation. A transaction applies the accepted answer batch or booking once; the same key and payload returns the stored result, while a changed payload conflicts. Each connection has a generation and a leased executor claim. Stale jobs cannot write new facts. On a fresh job, pending durable turns are replayed in database order through a new native `AgentSession`; a Python session object is never deserialized. `reconcile` checks active attempts and dispatches against the self-hosted server.

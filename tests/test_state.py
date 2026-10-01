@@ -479,3 +479,36 @@ def test_review_walks_answers_and_applies_correction(active):
         decide(f"accept-{index}", "That is correct", "accept")
     assert reopened.next_action(onboarding_id)["kind"] == "complete"
     assert reopened.get(onboarding_id)["state"]["customer.name"]["value"] == "Sara"
+
+
+# A LiveKit client timezone is saved once and never replaces a spoken answer.
+def test_detected_timezone_is_validated_and_fenced(active):
+    store, onboarding_id, credential, connection_id = active
+    assert not store.set_detected_timezone(
+        onboarding_id, connection_id, "executor", "Not/A_Zone"
+    )
+    assert store.get(onboarding_id)["revision"] == 0
+    capture(active, "pending-timezone")
+    assert not store.set_detected_timezone(
+        onboarding_id, connection_id, "executor", "Africa/Cairo"
+    )
+    apply(active, "pending-timezone", {})
+    assert store.set_detected_timezone(
+        onboarding_id, connection_id, "executor", "Africa/Cairo"
+    )
+    assert store.get(onboarding_id)["state"]["followup.customer_timezone"] == {
+        "status": "answered",
+        "value": "Africa/Cairo",
+    }
+    assert store.get(onboarding_id)["revision"] == 1
+    assert not store.set_detected_timezone(
+        onboarding_id, connection_id, "executor", "Europe/London"
+    )
+    new_connection, _ = store.connect_attempt(
+        onboarding_id, credential, "new-room", "new-person"
+    )
+    store.claim(new_connection, "new-executor")
+    with pytest.raises(PermissionError):
+        store.set_detected_timezone(
+            onboarding_id, connection_id, "executor", "America/New_York"
+        )

@@ -395,9 +395,37 @@ async def entrypoint(ctx: JobContext) -> None:
             pass
 
     ctx.add_shutdown_callback(stop_lease)
-    if not ctx.is_fake_job():
-        await ctx.wait_for_participant(identity=participant)
     agent = OnboardingAgent(store, onboarding_id, connection_id, executor_id)
+    if not ctx.is_fake_job():
+        # LiveKit synchronizes client attributes to the agent, including late updates.
+        async def save_participant_timezone(attributes: dict[str, str]) -> None:
+            timezone = attributes.get("customer.timezone")
+            if timezone:
+                await asyncio.to_thread(
+                    store.set_detected_timezone,
+                    onboarding_id,
+                    connection_id,
+                    executor_id,
+                    timezone,
+                )
+
+        @ctx.room.on("participant_attributes_changed")
+        def on_participant_attributes_changed(changed_attributes, remote) -> None:
+            if remote.identity != participant or "customer.timezone" not in changed_attributes:
+                return
+
+            async def save_late_timezone() -> None:
+                try:
+                    await save_participant_timezone(remote.attributes)
+                except PermissionError:
+                    pass  # A newer authorized connection superseded this job.
+
+            task = asyncio.create_task(save_late_timezone())
+            agent.observation_tasks.add(task)
+            task.add_done_callback(agent.observation_tasks.discard)
+
+        remote = await ctx.wait_for_participant(identity=participant)
+        await save_participant_timezone(remote.attributes)
     text_only = ctx.is_fake_job() and os.getenv("ONBOARDING_TEXT_ONLY") == "1"
     turn_handling = TurnHandlingOptions(preemptive_generation={"enabled": False})
     if text_only:
